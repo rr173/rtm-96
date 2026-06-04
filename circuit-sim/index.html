@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Timing Simulator &amp; Waveform Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="toolbar">
+    <div class="toolbar-left">
+      <span class="logo">⚡ CircuitSim</span>
+    </div>
+    <div class="toolbar-center">
+      <label>Clock Period: <input type="number" id="clockPeriod" value="10" min="2" max="100" step="1"> ns</label>
+      <label>Sim Duration: <input type="number" id="simDuration" value="200" min="10" max="10000" step="10"> ns</label>
+      <label>Gate Delay: <input type="number" id="gateDelay" value="1" min="1" max="10" step="1"> ns</label>
+    </div>
+    <div class="toolbar-right">
+      <button id="btnRun" class="btn btn-primary">▶ Run</button>
+      <button id="btnStop" class="btn btn-danger" disabled>■ Stop</button>
+      <button id="btnClear" class="btn">✕ Clear</button>
+    </div>
+  </header>
+  <main id="workspace">
+    <div id="editor-panel">
+      <div class="panel-header">
+        <span>Netlist Editor</span>
+        <span class="hint">Verilog-style</span>
+      </div>
+      <div id="editor-wrapper">
+        <div id="line-numbers"></div>
+        <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+      </div>
+      <div id="error-panel" class="hidden">
+        <div class="error-header">⚠ Parse Errors</div>
+        <div id="error-list"></div>
+      </div>
+    </div>
+    <div id="divider" title="Drag to resize"></div>
+    <div id="waveform-panel">
+      <div class="panel-header">
+        <span>Waveform Viewer</span>
+        <span id="sim-status" class="status-idle">Idle</span>
+      </div>
+      <div id="cursor-toolbar">
+        <button id="btn-set-cursor-a" class="btn btn-cursor btn-cursor-a">Set A</button>
+        <button id="btn-set-cursor-b" class="btn btn-cursor btn-cursor-b">Set B</button>
+        <button id="btn-clear-cursors" class="btn btn-cursor">Clear Cursors</button>
+      </div>
+      <div id="measurement-panel" class="hidden">
+        <div class="meas-row"><span class="meas-label" style="color:#89b4fa;">A:</span><span id="meas-time-a" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label" style="color:#fab387;">B:</span><span id="meas-time-b" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label">ΔT:</span><span id="meas-delta-t" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label">Cycles:</span><span id="meas-cycles" class="meas-value">--</span></div>
+        <div class="meas-divider"></div>
+        <div class="meas-row"><span class="meas-label">Signal:</span><span id="meas-signal-name" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label">Rise:</span><span id="meas-rise-count" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label">Fall:</span><span id="meas-fall-count" class="meas-value">--</span></div>
+        <div class="meas-row"><span class="meas-label">Freq:</span><span id="meas-freq" class="meas-value">--</span></div>
+      </div>
+      <div id="search-bar">
+        <input type="text" id="search-input" placeholder="e.g. q0.rise within 10ns q1.rise" spellcheck="false" autocomplete="off">
+        <button id="btn-search" class="btn btn-search-go">Search</button>
+        <button id="btn-search-prev" class="btn btn-search-nav" disabled>&#9664;</button>
+        <span id="search-result-index">0/0</span>
+        <button id="btn-search-next" class="btn btn-search-nav" disabled>&#9654;</button>
+      </div>
+      <div id="search-results" class="hidden"></div>
+      <div id="waveform-area">
+        <div id="time-axis"></div>
+        <div id="signal-list">
+          <div id="signal-list-inner"></div>
+        </div>
+        <canvas id="waveform-canvas"></canvas>
+        <div id="cursor-tooltip" class="hidden"></div>
+      </div>
+    </div>
+    <div id="coverage-panel" class="hidden">
+      <div class="panel-header coverage-header">
+        <span>Coverage Report</span>
+        <button id="coverage-toggle" class="coverage-toggle">▼</button>
+      </div>
+      <div id="coverage-content">
+        <div class="coverage-charts">
+          <div class="chart-container">
+            <canvas id="toggle-chart" width="90" height="90"></canvas>
+            <div class="chart-label">Toggle Coverage</div>
+          </div>
+          <div class="chart-container">
+            <canvas id="branch-chart" width="90" height="90"></canvas>
+            <div class="chart-label">Branch Coverage</div>
+          </div>
+        </div>
+        <div class="coverage-lists">
+          <div class="coverage-section">
+            <div class="coverage-section-header">
+              <span class="dot uncovered-dot"></span>
+              <span>Uncovered Signals</span>
+              <span id="uncovered-count" class="count-badge">0</span>
+            </div>
+            <div id="uncovered-list" class="coverage-list"></div>
+          </div>
+          <div class="coverage-section">
+            <div class="coverage-section-header">
+              <span class="dot branch-dot"></span>
+              <span>Uncovered Branches</span>
+              <span id="unbranched-count" class="count-badge">0</span>
+            </div>
+            <div id="branch-list" class="coverage-list"></div>
+          </div>
+          <div class="coverage-section">
+            <div class="coverage-section-header">
+              <span class="dot deadcode-dot"></span>
+              <span>Dead Code</span>
+              <span id="deadcode-count" class="count-badge">0</span>
+            </div>
+            <div id="deadcode-list" class="coverage-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="assertions-panel" class="hidden">
+      <div class="panel-header assertions-header">
+        <span>Assertions</span>
+        <button id="assertions-toggle" class="coverage-toggle">▼</button>
+      </div>
+      <div id="assertions-content">
+        <div class="assertions-summary">
+          <span class="assertions-count"><span id="assertions-passed">0</span>/<span id="assertions-total">0</span> passed</span>
+        </div>
+        <div id="assertions-list" class="assertions-list"></div>
+      </div>
+    </div>
+  </main>
+  <div id="glitch-detail" class="hidden">
+    <div class="glitch-detail-header">
+      <span>⚠ Race Hazard Detail</span>
+      <button id="glitch-close">✕</button>
+    </div>
+    <div id="glitch-detail-body"></div>
+  </div>
+
+  <div id="frame-detail" class="hidden">
+    <div class="frame-detail-header">
+      <span>📡 Frame Detail</span>
+      <button id="frame-close">✕</button>
+    </div>
+    <div id="frame-detail-body"></div>
+  </div>
+
+  <div id="cdc-detail" class="hidden">
+    <div class="cdc-detail-header">
+      <span>⚡ CDC Cross-Domain Detail</span>
+      <button id="cdc-close">✕</button>
+    </div>
+    <div id="cdc-detail-body"></div>
+  </div>
+
+  <div id="create-bus-dialog" class="dialog hidden">
+    <div class="dialog-header">
+      <span>Create Bus</span>
+      <button class="dialog-close" data-dialog="create-bus-dialog">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-row">
+        <label>Bus Name:</label>
+        <input type="text" id="bus-name-input" placeholder="e.g., data_bus">
+      </div>
+      <div class="form-row">
+        <label>Select Signals (MSB to LSB order):</label>
+      </div>
+      <div id="bus-bit-list" class="bus-bit-list"></div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-cancel-bus" class="btn">Cancel</button>
+      <button id="btn-create-bus" class="btn btn-primary">Create Bus</button>
+    </div>
+  </div>
+
+  <div id="attach-decoder-dialog" class="dialog hidden">
+    <div class="dialog-header">
+      <span>Attach Protocol Decoder</span>
+      <button class="dialog-close" data-dialog="attach-decoder-dialog">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-row">
+        <label>Bus:</label>
+        <span id="decoder-bus-name" class="mono"></span>
+      </div>
+      <div class="form-row">
+        <label>Start Value (hex):</label>
+        <input type="number" id="decoder-start-value" min="0" value="0">
+      </div>
+      <div class="form-row">
+        <label>Frame End Type:</label>
+        <select id="decoder-end-type">
+          <option value="value">End Value</option>
+          <option value="fixed">Fixed Length</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>End Value (hex):</label>
+        <input type="number" id="decoder-end-value" min="0" value="15">
+      </div>
+      <div class="form-row">
+        <label>Fixed Length (ns):</label>
+        <input type="number" id="decoder-fixed-length" min="1" value="10">
+      </div>
+      <div class="form-row">
+        <label>Fields:</label>
+        <button id="btn-add-field" class="btn btn-small" type="button">+ Add Field</button>
+      </div>
+      <div id="decoder-fields" class="decoder-fields"></div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-cancel-decoder" class="btn">Cancel</button>
+      <button id="btn-create-decoder" class="btn btn-primary">Attach Decoder</button>
+    </div>
+  </div>
+</div>
+<script src="parser.js"></script>
+<script src="simulator.js"></script>
+<script src="coverage.js"></script>
+<script src="waveform.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
