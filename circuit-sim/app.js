@@ -205,6 +205,13 @@
     });
   }
 
+  var btnTraceToggle = document.getElementById('btn-trace-toggle');
+  if (btnTraceToggle) {
+    btnTraceToggle.addEventListener('change', function() {
+      viewer.setTraceEnabled(this.checked);
+    });
+  }
+
   viewer.updateExportButtonState();
 
   function runSimulation() {

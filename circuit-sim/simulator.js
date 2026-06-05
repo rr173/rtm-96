@@ -490,6 +490,9 @@ function createSimulator() {
 
     checkAssertions(simDuration);
 
+    var regInputs = buildRegInputs(netlist);
+    depGraph.regInputs = regInputs;
+
     var glitches = detectGlitches(signalNames, waveforms, depGraph, gateDelay);
     var cdcViolations = detectCDCViolations(signalMap, depGraph, netlist);
 
@@ -595,10 +598,59 @@ function createSimulator() {
     return paths;
   }
 
+  function buildRegInputs(netlist) {
+    var regInputs = {};
+
+    function collectRegInputs(stmt, inputs) {
+      if (stmt.type === 'nb_assign' || stmt.type === 'blocking_assign') {
+        var exprInputs = collectExprSignals(stmt.expr);
+        for (var key in exprInputs) {
+          if (exprInputs.hasOwnProperty(key)) {
+            inputs[key] = true;
+          }
+        }
+      } else if (stmt.type === 'ifelse') {
+        var condInputs = collectExprSignals(stmt.condition);
+        for (var ck in condInputs) {
+          if (condInputs.hasOwnProperty(ck)) {
+            inputs[ck] = true;
+          }
+        }
+        for (var ii = 0; ii < stmt.ifBody.length; ii++) {
+          collectRegInputs(stmt.ifBody[ii], inputs);
+        }
+        for (var ei = 0; ei < stmt.elseBody.length; ei++) {
+          collectRegInputs(stmt.elseBody[ei], inputs);
+        }
+      }
+    }
+
+    function collectAllRegInputs(stmt, clkName) {
+      if (stmt.type === 'nb_assign' || stmt.type === 'blocking_assign') {
+        if (!regInputs[stmt.target]) regInputs[stmt.target] = {};
+        collectRegInputs(stmt, regInputs[stmt.target]);
+      } else if (stmt.type === 'ifelse') {
+        for (var ii = 0; ii < stmt.ifBody.length; ii++) {
+          collectAllRegInputs(stmt.ifBody[ii], clkName);
+        }
+        for (var ei = 0; ei < stmt.elseBody.length; ei++) {
+          collectAllRegInputs(stmt.elseBody[ei], clkName);
+        }
+      }
+    }
+
+    for (var si = 0; si < netlist.sequential.length; si++) {
+      var seq = netlist.sequential[si];
+      collectAllRegInputs(seq, seq.clk || 'clk');
+    }
+
+    return regInputs;
+  }
+
   function detectCDCViolations(signalMap, depGraph, netlist) {
     var violations = [];
     var regSources = {};
-    var regInputs = {};
+    var regInputs = depGraph.regInputs || {};
 
     for (var name in signalMap) {
       if (!signalMap.hasOwnProperty(name)) continue;

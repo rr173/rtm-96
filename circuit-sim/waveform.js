@@ -80,6 +80,12 @@ var WaveformViewer = (function() {
     this.assertionStatus = {};
     this.highlightedAssertion = null;
 
+    this.traceEnabled = true;
+    this.selectedEdge = null;
+    this.traceArrows = [];
+    this.causalSignals = {};
+    this.hoveredArrow = null;
+
     this.snapshots = [];
     this.maxSnapshots = 5;
     this.compareMode = false;
@@ -146,6 +152,12 @@ var WaveformViewer = (function() {
 
     this.resizeObserver = new ResizeObserver(function() { self.resize(); self.draw(); });
     this.resizeObserver.observe(this.canvas.parentElement);
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        self.clearTrace();
+      }
+    });
   }
 
   Viewer.prototype.setData = function(result) {
@@ -161,6 +173,7 @@ var WaveformViewer = (function() {
     this.assertionViolations = result.assertionViolations || [];
     this.assertionStatus = result.assertionStatus || {};
     this.highlightedAssertion = null;
+    this.clearTrace();
 
     this.clockSignals = {};
     for (var ci = 0; ci < this.clocks.length; ci++) {
@@ -508,6 +521,9 @@ var WaveformViewer = (function() {
     var nameSpan = document.createElement('span');
     nameSpan.textContent = name;
     nameSpan.className = 'signal-name';
+    if (this.causalSignals && this.causalSignals[name]) {
+      nameSpan.classList.add('causal-signal');
+    }
     label.appendChild(nameSpan);
 
     var toggleSpan = document.createElement('span');
@@ -1000,6 +1016,17 @@ var WaveformViewer = (function() {
       this.hoveredItem = null;
     }
 
+    var prevHoveredArrow = this.hoveredArrow;
+    this.hoveredArrow = this.isPointNearArrow(this.mouseX, this.mouseY);
+    if (this.hoveredArrow !== -1) {
+      this.canvas.style.cursor = 'pointer';
+    } else if (!this.cursorPlacementMode) {
+      var hitCursor = this.hitTestCursor(this.mouseX);
+      if (!hitCursor) {
+        this.canvas.style.cursor = 'crosshair';
+      }
+    }
+
     this.draw();
   };
 
@@ -1010,6 +1037,7 @@ var WaveformViewer = (function() {
     this.hoveredItem = null;
     this.hoveredTime = -1;
     this.hoveredFrame = null;
+    this.hoveredArrow = null;
     this.draw();
   };
 
@@ -1028,16 +1056,41 @@ var WaveformViewer = (function() {
     var y = my + this.scrollY;
     var itemInfo = this.getItemAtY(y);
 
-    if (itemInfo) {
+    if (this.traceEnabled && itemInfo && itemInfo.item.type === 'signal') {
       var itemName = itemInfo.item.name;
+      if (!this.clockSignals[itemName]) {
+        var edge = this.findNearestEdge(itemName, clickTime);
+        if (edge) {
+          if (this.selectedEdge &&
+              this.selectedEdge.signal === edge.signal &&
+              this.selectedEdge.time === edge.time) {
+            this.clearTrace();
+          } else {
+            this.selectedEdge = edge;
+            this.performCausalityTrace(edge);
+            this.buildSignalLabels();
+            this.draw();
+          }
+          return;
+        } else {
+          if (this.selectedEdge) {
+            this.clearTrace();
+            return;
+          }
+        }
+      }
+    }
 
-      if (itemInfo.item.type === 'bus' && this.decoders[itemName]) {
+    if (itemInfo) {
+      var itemName2 = itemInfo.item.name;
+
+      if (itemInfo.item.type === 'bus' && this.decoders[itemName2]) {
         if (itemInfo.offsetY < DECODER_HEIGHT) {
-          var decoder = this.decoders[itemName];
+          var decoder = this.decoders[itemName2];
           for (var fi = 0; fi < decoder.frames.length; fi++) {
             var frame = decoder.frames[fi];
             if (clickTime >= frame.startTime && clickTime <= frame.endTime) {
-              this.showFrameDetail(frame, itemName);
+              this.showFrameDetail(frame, itemName2);
               return;
             }
           }
@@ -1048,14 +1101,16 @@ var WaveformViewer = (function() {
         var clickedGlitch = null;
         for (var g = 0; g < this.glitches.length; g++) {
           var gl = this.glitches[g];
-          if (gl.signal === itemName && clickTime >= gl.startTime && clickTime <= gl.endTime) {
+          if (gl.signal === itemName2 && clickTime >= gl.startTime && clickTime <= gl.endTime) {
             this.showGlitchDetail(gl);
             break;
           }
         }
       }
 
-      this.toggleHighlight(itemName);
+      this.toggleHighlight(itemName2);
+    } else if (this.selectedEdge) {
+      this.clearTrace();
     }
   };
 
@@ -1238,6 +1293,8 @@ var WaveformViewer = (function() {
     this.drawCDCMarkers(ctx, w, h);
     this.drawSearchMarkers(ctx, w, h);
     this.drawDualCursors(ctx, w, h);
+    this.drawTraceArrows(ctx, w, h);
+    this.drawSelectedEdgeHighlight(ctx, w, h);
 
     if (this.mouseX >= 0 && this.mouseY >= 0 && !this.cursorDragging) {
       this.drawCursor(ctx, w, h);
@@ -1941,6 +1998,31 @@ var WaveformViewer = (function() {
   Viewer.prototype.updateTooltip = function() {
     var tooltip = document.getElementById('cursor-tooltip');
     var time = (this.mouseX + this.scrollX) / this.pixelsPerNs;
+
+    if (this.hoveredArrow !== -1 && this.traceArrows[this.hoveredArrow]) {
+      tooltip.classList.remove('hidden');
+      var arrow = this.traceArrows[this.hoveredArrow];
+      var html = '<div class="causal-tooltip">';
+      html += '<div class="causal-tooltip-header">🔗 Causal Edge</div>';
+      html += '<div class="causal-tooltip-signals">';
+      html += '<span class="causal-src">' + arrow.source.signal + '</span>';
+      html += ' → ';
+      html += '<span class="causal-dst">' + arrow.target.signal + '</span>';
+      html += '</div>';
+      html += '<div class="causal-tooltip-delay">Propagation Delay: ' + arrow.delay.toFixed(2) + ' ns</div>';
+      html += '<div class="causal-tooltip-depth">Depth: ' + (arrow.depth + 1) + '</div>';
+      html += '</div>';
+      tooltip.innerHTML = html;
+
+      var canvasRect = this.canvas.getBoundingClientRect();
+      var panelRect = this.canvas.parentElement.getBoundingClientRect();
+      var tx = this.mouseX + canvasRect.left - panelRect.left + SIGNAL_LABEL_WIDTH + 12;
+      var ty = this.mouseY + canvasRect.top - panelRect.top - 10;
+
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = ty + 'px';
+      return;
+    }
 
     if (this.hoveredAssertionViolation) {
       tooltip.classList.remove('hidden');
@@ -4266,6 +4348,298 @@ var WaveformViewer = (function() {
     }
     ChangeHistoryTable.init(this);
     ChangeHistoryTable.show(signalNames);
+  };
+
+  Viewer.prototype.setTraceEnabled = function(enabled) {
+    this.traceEnabled = enabled;
+    if (!enabled) {
+      this.clearTrace();
+    }
+  };
+
+  Viewer.prototype.clearTrace = function() {
+    this.selectedEdge = null;
+    this.traceArrows = [];
+    this.causalSignals = {};
+    this.hoveredArrow = null;
+    this.buildSignalLabels();
+    this.draw();
+  };
+
+  Viewer.prototype.getSignalYCenter = function(signalName) {
+    var allItems = this.getAllDisplayNames();
+    var currentY = 0;
+    for (var i = 0; i < allItems.length; i++) {
+      var item = allItems[i];
+      var itemH = this.getDisplayItemHeight(item);
+      if (item.type === 'signal' && item.name === signalName) {
+        return currentY + itemH / 2;
+      }
+      currentY += itemH;
+    }
+    return -1;
+  };
+
+  Viewer.prototype.findNearestEdge = function(signalName, clickTime) {
+    var wf = this.waveforms[signalName];
+    if (!wf || wf.length < 2) return null;
+    var bestIdx = -1;
+    var bestDist = Infinity;
+    for (var i = 1; i < wf.length; i++) {
+      if (wf[i].value !== wf[i - 1].value) {
+        var dist = Math.abs(wf[i].time - clickTime);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+    }
+    if (bestIdx === -1) return null;
+    var hitRadiusNs = 5 / this.pixelsPerNs;
+    if (bestDist > hitRadiusNs && bestDist > 2) return null;
+    var evt = wf[bestIdx];
+    var prevEvt = wf[bestIdx - 1];
+    var edgeType = evt.value > prevEvt.value ? 'rise' : 'fall';
+    return {
+      signal: signalName,
+      time: evt.time,
+      value: evt.value,
+      prevValue: prevEvt.value,
+      edgeType: edgeType
+    };
+  };
+
+  Viewer.prototype.getDriverSignals = function(signalName) {
+    if (!this.depGraph) return [];
+    var drivers = [];
+    if (this.depGraph.combDeps && this.depGraph.combDeps[signalName]) {
+      var combDrivers = this.depGraph.combDeps[signalName];
+      for (var ci = 0; ci < combDrivers.length; ci++) {
+        if (!this.clockSignals[combDrivers[ci]]) {
+          drivers.push(combDrivers[ci]);
+        }
+      }
+    }
+    if (this.depGraph.regInputs && this.depGraph.regInputs[signalName]) {
+      var regDrivers = Object.keys(this.depGraph.regInputs[signalName]);
+      for (var ri = 0; ri < regDrivers.length; ri++) {
+        if (!this.clockSignals[regDrivers[ri]] && drivers.indexOf(regDrivers[ri]) === -1) {
+          drivers.push(regDrivers[ri]);
+        }
+      }
+    }
+    return drivers;
+  };
+
+  Viewer.prototype.findLastEdgeBefore = function(signalName, targetTime) {
+    var wf = this.waveforms[signalName];
+    if (!wf || wf.length === 0) return null;
+    for (var i = wf.length - 1; i >= 1; i--) {
+      if (wf[i].time < targetTime && wf[i].value !== wf[i - 1].value) {
+        var edgeType = wf[i].value > wf[i - 1].value ? 'rise' : 'fall';
+        return {
+          signal: signalName,
+          time: wf[i].time,
+          value: wf[i].value,
+          prevValue: wf[i - 1].value,
+          edgeType: edgeType
+        };
+      }
+    }
+    for (var j = wf.length - 1; j >= 0; j--) {
+      if (wf[j].time < targetTime) {
+        return {
+          signal: signalName,
+          time: wf[j].time,
+          value: wf[j].value,
+          prevValue: null,
+          edgeType: 'stable'
+        };
+      }
+    }
+    return null;
+  };
+
+  Viewer.prototype.performCausalityTrace = function(edge) {
+    var self = this;
+    var arrows = [];
+    var causalSigs = {};
+    causalSigs[edge.signal] = true;
+    var maxDepth = 3;
+    var visited = {};
+
+    var TRACE_COLORS = ['#fab387', '#f9e2af', '#6c7086'];
+
+    function traceRecursive(targetEdge, depth) {
+      if (depth >= maxDepth) return;
+      var visitKey = targetEdge.signal + '@' + targetEdge.time;
+      if (visited[visitKey]) return;
+      visited[visitKey] = true;
+
+      var sigInfo = self.signalMap[targetEdge.signal];
+      var isReg = sigInfo && sigInfo.isReg;
+      var searchTime = targetEdge.time;
+      if (isReg) {
+        searchTime = targetEdge.time - 0.001;
+      }
+
+      var drivers = self.getDriverSignals(targetEdge.signal);
+
+      for (var di = 0; di < drivers.length; di++) {
+        var driverName = drivers[di];
+        var driverEdge = self.findLastEdgeBefore(driverName, searchTime);
+        if (!driverEdge) continue;
+
+        var delay = targetEdge.time - driverEdge.time;
+        if (delay < 0) delay = 0;
+
+        arrows.push({
+          source: driverEdge,
+          target: targetEdge,
+          depth: depth,
+          color: TRACE_COLORS[depth] || TRACE_COLORS[TRACE_COLORS.length - 1],
+          delay: delay
+        });
+
+        causalSigs[driverName] = true;
+
+        traceRecursive(driverEdge, depth + 1);
+      }
+    }
+
+    traceRecursive(edge, 0);
+
+    this.traceArrows = arrows;
+    this.causalSignals = causalSigs;
+  };
+
+  Viewer.prototype.drawTraceArrows = function(ctx, w, h) {
+    if (this.traceArrows.length === 0) return;
+    var self = this;
+
+    for (var i = 0; i < this.traceArrows.length; i++) {
+      var arrow = this.traceArrows[i];
+      var srcY = this.getSignalYCenter(arrow.source.signal);
+      var tgtY = this.getSignalYCenter(arrow.target.signal);
+      if (srcY === -1 || tgtY === -1) continue;
+
+      var srcX = arrow.source.time * this.pixelsPerNs - this.scrollX;
+      var tgtX = arrow.target.time * this.pixelsPerNs - this.scrollX;
+
+      if ((srcX < -100 && tgtX < -100) || (srcX > w + 100 && tgtX > w + 100)) continue;
+
+      var srcYDisplay = srcY - this.scrollY;
+      var tgtYDisplay = tgtY - this.scrollY;
+
+      var yOffset = (i % 2 === 0 ? 1 : -1) * 8 * (arrow.depth + 1);
+      var ctrlX1 = srcX + (tgtX - srcX) * 0.3;
+      var ctrlX2 = srcX + (tgtX - srcX) * 0.7;
+      var midY = (srcYDisplay + tgtYDisplay) / 2 + yOffset;
+
+      var isHovered = this.hoveredArrow === i;
+
+      ctx.save();
+      ctx.strokeStyle = arrow.color;
+      ctx.lineWidth = isHovered ? 2.5 : 1.8;
+      ctx.setLineDash([6, 4]);
+      ctx.lineDashOffset = 0;
+
+      ctx.beginPath();
+      ctx.moveTo(srcX, srcYDisplay);
+      ctx.bezierCurveTo(ctrlX1, midY, ctrlX2, midY, tgtX, tgtYDisplay);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+
+      var arrowSize = isHovered ? 10 : 8;
+      var angle = Math.atan2(tgtYDisplay - midY, tgtX - ctrlX2);
+      var tipX = tgtX;
+      var tipY = tgtYDisplay;
+
+      ctx.fillStyle = arrow.color;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(
+        tipX - arrowSize * Math.cos(angle - Math.PI / 6),
+        tipY - arrowSize * Math.sin(angle - Math.PI / 6)
+      );
+      ctx.lineTo(
+        tipX - arrowSize * Math.cos(angle + Math.PI / 6),
+        tipY - arrowSize * Math.sin(angle + Math.PI / 6)
+      );
+      ctx.closePath();
+      ctx.fill();
+
+      if (isHovered) {
+        ctx.fillStyle = arrow.color;
+        ctx.beginPath();
+        ctx.arc(srcX, srcYDisplay, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+  };
+
+  Viewer.prototype.drawSelectedEdgeHighlight = function(ctx, w, h) {
+    if (!this.selectedEdge) return;
+    var yCenter = this.getSignalYCenter(this.selectedEdge.signal);
+    if (yCenter === -1) return;
+    var x = this.selectedEdge.time * this.pixelsPerNs - this.scrollX;
+    var yDisplay = yCenter - this.scrollY;
+
+    if (x < -20 || x > w + 20 || yDisplay < -20 || yDisplay > h + 20) return;
+
+    ctx.save();
+    ctx.fillStyle = '#f9e2af';
+    ctx.shadowColor = '#f9e2af';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(x, yDisplay, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#1e1e2e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  Viewer.prototype.isPointNearArrow = function(mx, my) {
+    if (this.traceArrows.length === 0) return -1;
+    var hitDist = 8;
+
+    for (var i = 0; i < this.traceArrows.length; i++) {
+      var arrow = this.traceArrows[i];
+      var srcY = this.getSignalYCenter(arrow.source.signal);
+      var tgtY = this.getSignalYCenter(arrow.target.signal);
+      if (srcY === -1 || tgtY === -1) continue;
+
+      var srcX = arrow.source.time * this.pixelsPerNs - this.scrollX;
+      var tgtX = arrow.target.time * this.pixelsPerNs - this.scrollX;
+      var srcYDisplay = srcY - this.scrollY;
+      var tgtYDisplay = tgtY - this.scrollY;
+
+      var steps = 20;
+      var yOffset = (i % 2 === 0 ? 1 : -1) * 8 * (arrow.depth + 1);
+      for (var s = 0; s <= steps; s++) {
+        var t = s / steps;
+        var mt = 1 - t;
+        var ctrlX1 = srcX + (tgtX - srcX) * 0.3;
+        var ctrlX2 = srcX + (tgtX - srcX) * 0.7;
+        var midY = (srcYDisplay + tgtYDisplay) / 2 + yOffset;
+
+        var px = mt * mt * mt * srcX + 3 * mt * mt * t * ctrlX1 + 3 * mt * t * t * ctrlX2 + t * t * t * tgtX;
+        var py = mt * mt * mt * srcYDisplay + 3 * mt * mt * t * midY + 3 * mt * t * t * midY + t * t * t * tgtYDisplay;
+
+        var dx = mx - px;
+        var dy = my - py;
+        if (dx * dx + dy * dy < hitDist * hitDist) {
+          return i;
+        }
+      }
+    }
+    return -1;
   };
 
   return Viewer;

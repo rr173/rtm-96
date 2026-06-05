@@ -2684,3 +2684,100 @@ html, body {
   color: var(--text-muted);
   font-size: 14px;
 }
+
+.trace-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.trace-switch input[type="checkbox"] {
+  display: none;
+}
+
+.trace-slider {
+  position: relative;
+  width: 32px;
+  height: 16px;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.trace-slider::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.trace-switch input[type="checkbox"]:checked + .trace-slider {
+  background: rgba(250, 179, 135, 0.4);
+}
+
+.trace-switch input[type="checkbox"]:checked + .trace-slider::before {
+  left: 18px;
+  background: var(--orange);
+}
+
+.trace-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.trace-switch input[type="checkbox"]:checked ~ .trace-label {
+  color: var(--orange);
+}
+
+.signal-name.causal-signal {
+  font-weight: 700;
+  color: var(--orange);
+}
+
+.causal-tooltip {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.causal-tooltip-header {
+  font-weight: 600;
+  color: var(--orange);
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.causal-tooltip-signals {
+  font-family: var(--font-mono);
+  margin-bottom: 4px;
+}
+
+.causal-src {
+  color: var(--yellow);
+}
+
+.causal-dst {
+  color: var(--green);
+}
+
+.causal-tooltip-delay {
+  color: var(--text-secondary);
+}
+
+.causal-tooltip-depth {
+  color: var(--text-muted);
+  font-size: 11px;
+}

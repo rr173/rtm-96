@@ -53,7 +53,8 @@ self.onmessage = function(e) {
           combDeps: result.depGraph.combDeps,
           reverseDeps: result.depGraph.reverseDeps,
           signalSources: result.depGraph.signalSources,
-          topoOrder: result.depGraph.topoOrder
+          topoOrder: result.depGraph.topoOrder,
+          regInputs: result.depGraph.regInputs
         },
         branches: result.branches,
         branchHits: result.branchHits,
