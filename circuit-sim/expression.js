@@ -284,20 +284,34 @@ var ExpressionEvaluator = (function() {
     if (this.lexer.tok === TOKEN.TICK) {
       this.lexer.next();
       var base = 10;
+      var valStr = '';
+      
       if (this.lexer.tok === TOKEN.IDENT || this.lexer.tok === TOKEN.NUMBER) {
-        var radixChar = this.lexer.tokValue.toLowerCase();
-        if (radixChar === 'h' || radixChar === 'd' || radixChar === 'b' || radixChar === 'o') {
+        var radixStr = this.lexer.tokValue.toLowerCase();
+        var firstChar = radixStr[0];
+        
+        if (firstChar === 'h' || firstChar === 'd' || firstChar === 'b' || firstChar === 'o') {
+          if (firstChar === 'h') base = 16;
+          else if (firstChar === 'b') base = 2;
+          else if (firstChar === 'o') base = 8;
+          
+          valStr = radixStr.length > 1 ? radixStr.substring(1) : '';
           this.lexer.next();
-          if (radixChar === 'h') base = 16;
-          else if (radixChar === 'b') base = 2;
-          else if (radixChar === 'o') base = 8;
+          
+          if (valStr === '' && (this.lexer.tok === TOKEN.NUMBER || this.lexer.tok === TOKEN.IDENT)) {
+            valStr = this.lexer.tokValue;
+            this.lexer.next();
+          }
+        } else {
+          valStr = radixStr;
+          this.lexer.next();
         }
       }
-      if (this.lexer.tok !== TOKEN.NUMBER && this.lexer.tok !== TOKEN.IDENT) {
+      
+      if (valStr === '') {
         throw new Error('Expected number after base specifier');
       }
-      var valStr = this.lexer.tokValue;
-      this.lexer.next();
+      
       var width = parseInt(numStr, 10);
       var value = parseInt(valStr, base);
       return { type: 'literal', value: value, width: width };

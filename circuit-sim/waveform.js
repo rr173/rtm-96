@@ -107,6 +107,7 @@ var WaveformViewer = (function() {
     this.scrollY = 0;
 
     this.hoveredSignal = null;
+    this.hoveredItem = null;
     this.hoveredTime = -1;
     this.hoveredFrame = null;
     this.hoveredCDC = null;
@@ -217,6 +218,11 @@ var WaveformViewer = (function() {
     this.collapsedGroups = {};
     this.filterText = '';
     this.watchWaveforms = {};
+
+    for (var wi = 0; wi < this.watchProbes.length; wi++) {
+      this.ungroupedSignals.push(this.watchProbes[wi].name);
+    }
+
     this.signalListEl.innerHTML = '';
     this.resize();
     this.draw();
@@ -352,13 +358,6 @@ var WaveformViewer = (function() {
       }
     }
 
-    for (var wi = 0; wi < this.watchProbes.length; wi++) {
-      var probe = this.watchProbes[wi];
-      if (this.matchesFilter(probe.name)) {
-        names.push({ name: probe.name, type: 'watch', probeId: probe.id });
-      }
-    }
-
     return names;
   };
 
@@ -375,8 +374,8 @@ var WaveformViewer = (function() {
       }
       return height;
     }
-    if (item.type === 'watch') {
-      var probe = this.watchProbes.find(function(p) { return p.id === item.probeId; });
+    if (item.type === 'signal' && this.isWatchProbe(item.name)) {
+      var probe = this.getWatchProbeByName(item.name);
       if (probe && probe.width > 1) {
         return BUS_HEIGHT;
       }
@@ -425,6 +424,17 @@ var WaveformViewer = (function() {
 
   Viewer.prototype.createSignalLabel = function(name, cdcSignalMap) {
     var self = this;
+
+    if (this.isWatchProbe(name)) {
+      var probe = this.getWatchProbeByName(name);
+      if (probe) {
+        var watchLabel = this.createWatchLabel(probe);
+        var watchHeight = probe.width > 1 ? BUS_HEIGHT : SIGNAL_HEIGHT;
+        watchLabel.style.height = watchHeight + 'px';
+        return watchLabel;
+      }
+    }
+
     var sig = this.signalMap[name] || {};
     var label = document.createElement('div');
     label.className = 'signal-label';
@@ -713,16 +723,6 @@ var WaveformViewer = (function() {
       innerEl.appendChild(busLabel);
     }
 
-    for (var wi = 0; wi < this.watchProbes.length; wi++) {
-      var probe = this.watchProbes[wi];
-      if (!this.matchesFilter(probe.name)) continue;
-
-      var watchLabel = this.createWatchLabel(probe);
-      var watchHeight = probe.width > 1 ? BUS_HEIGHT : SIGNAL_HEIGHT;
-      watchLabel.style.height = watchHeight + 'px';
-      innerEl.appendChild(watchLabel);
-    }
-
     this.setupDragAndDrop();
   };
 
@@ -962,6 +962,7 @@ var WaveformViewer = (function() {
 
     if (itemInfo) {
       this.hoveredSignal = itemInfo.item.name;
+      this.hoveredItem = itemInfo.item;
 
       if (itemInfo.item.type === 'bus' && this.decoders[itemInfo.item.name]) {
         if (itemInfo.offsetY < DECODER_HEIGHT) {
@@ -977,6 +978,7 @@ var WaveformViewer = (function() {
       }
     } else {
       this.hoveredSignal = null;
+      this.hoveredItem = null;
     }
 
     this.draw();
@@ -986,6 +988,7 @@ var WaveformViewer = (function() {
     this.mouseX = -1;
     this.mouseY = -1;
     this.hoveredSignal = null;
+    this.hoveredItem = null;
     this.hoveredTime = -1;
     this.hoveredFrame = null;
     this.draw();
@@ -1501,8 +1504,8 @@ var WaveformViewer = (function() {
           } else {
             this.drawBusWaveform(ctx, item.name, y, w);
           }
-        } else if (item.type === 'watch') {
-          var probe = this.watchProbes.find(function(p) { return p.id === item.probeId; });
+        } else if (item.type === 'signal' && this.isWatchProbe(item.name)) {
+          var probe = this.getWatchProbeByName(item.name);
           if (probe) {
             this.drawWatchBackground(ctx, y, itemH, w, probe.hasError);
             if (probe.width > 1) {
@@ -1960,28 +1963,31 @@ var WaveformViewer = (function() {
     var html = '<span class="tt-time">' + time.toFixed(1) + 'ns</span> ' +
       '<span class="tt-signal">' + this.hoveredSignal + '</span> ';
 
-    var bus = this.buses.find(function(b) { return b.name === this.hoveredSignal; }.bind(this));
-    var watchProbe = this.watchProbes.find(function(p) { return p.name === this.hoveredSignal; }.bind(this));
-
-    if (bus) {
-      var busValue = this.getBusValueAtTime(bus.name, time);
-      html += '<span class="tt-value">= ' + bus.width + "'h" + busValue.toString(16).toUpperCase() + '</span>';
-      html += '<div class="tt-bits">';
-      for (var bi = 0; bi < bus.bits.length; bi++) {
-        var bitVal = this.getValueAtTime(bus.bits[bi], time);
-        html += '<span class="tt-bit">' + bus.bits[bi] + '=' + bitVal + '</span>';
+    if (this.hoveredItem && this.isWatchProbe(this.hoveredSignal)) {
+      var watchProbe = this.getWatchProbeByName(this.hoveredSignal);
+      if (watchProbe) {
+        var watchValue = this.getValueAtTimeForWatch(watchProbe.id, time);
+        if (watchProbe.width > 1) {
+          html += '<span class="tt-value">= ' + watchProbe.width + "'h" + watchValue.toString(16).toUpperCase() + '</span>';
+        } else {
+          html += '<span class="tt-value">= ' + watchValue + '</span>';
+        }
+        html += '<div class="tt-bits">';
+        html += '<span class="tt-bit">expr: ' + watchProbe.expression + '</span>';
+        html += '</div>';
       }
-      html += '</div>';
-    } else if (watchProbe) {
-      var watchValue = this.getValueAtTimeForWatch(watchProbe.id, time);
-      if (watchProbe.width > 1) {
-        html += '<span class="tt-value">= ' + watchProbe.width + "'h" + watchValue.toString(16).toUpperCase() + '</span>';
-      } else {
-        html += '<span class="tt-value">= ' + watchValue + '</span>';
+    } else if (this.hoveredItem && this.hoveredItem.type === 'bus') {
+      var bus = this.buses.find(function(b) { return b.name === this.hoveredSignal; }.bind(this));
+      if (bus) {
+        var busValue = this.getBusValueAtTime(bus.name, time);
+        html += '<span class="tt-value">= ' + bus.width + "'h" + busValue.toString(16).toUpperCase() + '</span>';
+        html += '<div class="tt-bits">';
+        for (var bi = 0; bi < bus.bits.length; bi++) {
+          var bitVal = this.getValueAtTime(bus.bits[bi], time);
+          html += '<span class="tt-bit">' + bus.bits[bi] + '=' + bitVal + '</span>';
+        }
+        html += '</div>';
       }
-      html += '<div class="tt-bits">';
-      html += '<span class="tt-bit">expr: ' + watchProbe.expression + '</span>';
-      html += '</div>';
     } else {
       var value = this.getValueAtTime(this.hoveredSignal, time);
       html += '<span class="tt-value">= ' + value + '</span>';
@@ -3472,6 +3478,7 @@ var WaveformViewer = (function() {
     };
 
     this.watchProbes.push(probe);
+    this.ungroupedSignals.push(probe.name);
     this.buildWatchWaveform(probe);
     this.buildSignalLabels();
     this.resize();
@@ -3486,12 +3493,28 @@ var WaveformViewer = (function() {
       return { success: false, error: 'Probe not found' };
     }
 
+    var oldName = probe.name;
     var parseResult = ExpressionEvaluator.parse(expression);
 
     probe.name = name;
     probe.expression = expression;
     probe.ast = parseResult.success ? parseResult.ast : null;
     probe.parseError = parseResult.success ? null : parseResult.error;
+
+    if (oldName !== name) {
+      var loc = this.getSignalLocation(oldName);
+      if (loc) {
+        this.removeSignal(oldName);
+        if (loc.type === 'group') {
+          var group = this.signalGroups.find(function(g) { return g.id === loc.groupId; });
+          if (group) {
+            group.signals.splice(loc.index, 0, name);
+          }
+        } else {
+          this.ungroupedSignals.splice(loc.index, 0, name);
+        }
+      }
+    }
 
     this.buildWatchWaveform(probe);
     this.buildSignalLabels();
@@ -3505,12 +3528,22 @@ var WaveformViewer = (function() {
     var idx = this.watchProbes.findIndex(function(p) { return p.id === probeId; });
     if (idx === -1) return false;
 
+    var probe = this.watchProbes[idx];
     this.watchProbes.splice(idx, 1);
     delete this.watchWaveforms[probeId];
+    this.removeSignal(probe.name);
     this.buildSignalLabels();
     this.resize();
     this.draw();
     return true;
+  };
+
+  Viewer.prototype.isWatchProbe = function(name) {
+    return this.watchProbes.some(function(p) { return p.name === name; });
+  };
+
+  Viewer.prototype.getWatchProbeByName = function(name) {
+    return this.watchProbes.find(function(p) { return p.name === name; });
   };
 
   Viewer.prototype.drawWatchBackground = function(ctx, baseY, height, canvasW, hasError) {
@@ -3717,6 +3750,7 @@ var WaveformViewer = (function() {
     }
     label.dataset.watchId = probe.id;
     label.dataset.type = 'watch';
+    label.dataset.signal = probe.name;
     label.draggable = true;
 
     var prefixSpan = document.createElement('span');
