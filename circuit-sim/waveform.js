@@ -106,6 +106,9 @@ var WaveformViewer = (function() {
     this.scrollX = 0;
     this.scrollY = 0;
 
+    this.selectedSignalsForExport = new Set();
+    this.MAX_SELECTED_SIGNALS = 10;
+
     this.hoveredSignal = null;
     this.hoveredItem = null;
     this.hoveredTime = -1;
@@ -442,6 +445,10 @@ var WaveformViewer = (function() {
     label.dataset.type = 'signal';
     label.draggable = true;
 
+    if (this.selectedSignalsForExport.has(name)) {
+      label.classList.add('table-selected');
+    }
+
     if (this.compareMode && this.diffResults && this.diffResults.signalDiffs[name]) {
       var diffInfo = this.diffResults.signalDiffs[name];
       if (diffInfo.status === 'same') {
@@ -564,9 +571,13 @@ var WaveformViewer = (function() {
       label.appendChild(cdcInd);
     }
 
-    label.addEventListener('click', function() {
+    label.addEventListener('click', function(e) {
       var sigName = this.dataset.signal;
-      self.toggleHighlight(sigName);
+      if (e.ctrlKey || e.metaKey) {
+        self.toggleSignalSelection(sigName);
+      } else {
+        self.toggleHighlight(sigName);
+      }
     });
 
     return label;
@@ -700,6 +711,10 @@ var WaveformViewer = (function() {
       busLabel.dataset.signal = bus.name;
       busLabel.dataset.type = 'bus';
 
+      if (this.selectedSignalsForExport.has(bus.name)) {
+        busLabel.classList.add('table-selected');
+      }
+
       var height = BUS_HEIGHT;
       if (this.decoders[bus.name]) {
         height += DECODER_HEIGHT;
@@ -715,9 +730,13 @@ var WaveformViewer = (function() {
       busTypeSpan.textContent = bus.width + 'bit';
       busLabel.appendChild(busTypeSpan);
 
-      busLabel.addEventListener('click', function() {
+      busLabel.addEventListener('click', function(e) {
         var sigName = this.dataset.signal;
-        self.toggleHighlight(sigName);
+        if (e.ctrlKey || e.metaKey) {
+          self.toggleSignalSelection(sigName);
+        } else {
+          self.toggleHighlight(sigName);
+        }
       });
 
       innerEl.appendChild(busLabel);
@@ -3753,6 +3772,10 @@ var WaveformViewer = (function() {
     label.dataset.signal = probe.name;
     label.draggable = true;
 
+    if (this.selectedSignalsForExport.has(probe.name)) {
+      label.classList.add('table-selected');
+    }
+
     var prefixSpan = document.createElement('span');
     prefixSpan.className = 'watch-prefix';
     prefixSpan.textContent = 'W:';
@@ -3792,8 +3815,12 @@ var WaveformViewer = (function() {
       }
     });
 
-    label.addEventListener('click', function() {
-      self.toggleHighlight(probe.name);
+    label.addEventListener('click', function(e) {
+      if (e.ctrlKey || e.metaKey) {
+        self.toggleSignalSelection(probe.name);
+      } else {
+        self.toggleHighlight(probe.name);
+      }
     });
 
     return label;
@@ -3809,6 +3836,436 @@ var WaveformViewer = (function() {
       value = wf[i].value;
     }
     return value;
+  };
+
+  Viewer.prototype.toggleSignalSelection = function(signalName) {
+    var label = this.signalListEl.querySelector('.signal-label[data-signal="' + signalName + '"]');
+    if (!label) return;
+
+    if (this.selectedSignalsForExport.has(signalName)) {
+      this.selectedSignalsForExport.delete(signalName);
+      label.classList.remove('table-selected');
+    } else {
+      if (this.selectedSignalsForExport.size >= this.MAX_SELECTED_SIGNALS) {
+        alert('最多只能同时选择 ' + this.MAX_SELECTED_SIGNALS + ' 个信号导出');
+        return;
+      }
+      this.selectedSignalsForExport.add(signalName);
+      label.classList.add('table-selected');
+    }
+
+    this.updateExportButtonState();
+  };
+
+  Viewer.prototype.clearSignalSelection = function() {
+    var self = this;
+    var labels = this.signalListEl.querySelectorAll('.signal-label');
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].classList.remove('table-selected');
+    }
+    this.selectedSignalsForExport.clear();
+    this.updateExportButtonState();
+  };
+
+  Viewer.prototype.updateExportButtonState = function() {
+    var btn = document.getElementById('btn-export-table');
+    if (!btn) return;
+    btn.disabled = this.selectedSignalsForExport.size === 0;
+  };
+
+  Viewer.prototype.getWaveformForSignal = function(signalName) {
+    if (this.busWaveforms[signalName]) {
+      return this.busWaveforms[signalName];
+    }
+    if (this.waveforms[signalName]) {
+      return this.waveforms[signalName];
+    }
+    if (this.watchWaveforms[signalName]) {
+      return this.watchWaveforms[signalName];
+    }
+    return null;
+  };
+
+  Viewer.prototype.extractChangeHistory = function(signalNames) {
+    var changes = [];
+    var self = this;
+
+    for (var si = 0; si < signalNames.length; si++) {
+      var sigName = signalNames[si];
+      var wf = this.getWaveformForSignal(sigName);
+      if (!wf || wf.length < 2) continue;
+
+      for (var wi = 1; wi < wf.length; wi++) {
+        var prev = wf[wi - 1];
+        var curr = wf[wi];
+
+        if (prev.value === curr.value) continue;
+
+        var nextEvent = wf[wi + 1];
+        var duration = nextEvent ? (nextEvent.time - curr.time) : null;
+
+        var edgeType = '';
+        if (typeof prev.value === 'number' && typeof curr.value === 'number') {
+          if (prev.value === 0 && curr.value === 1) {
+            edgeType = 'rise';
+          } else if (prev.value === 1 && curr.value === 0) {
+            edgeType = 'fall';
+          }
+        }
+
+        changes.push({
+          time: curr.time,
+          signal: sigName,
+          oldValue: prev.value,
+          newValue: curr.value,
+          duration: duration,
+          edgeType: edgeType
+        });
+      }
+    }
+
+    changes.sort(function(a, b) {
+      if (a.time !== b.time) return a.time - b.time;
+      return a.signal.localeCompare(b.signal);
+    });
+
+    return changes;
+  };
+
+  var ChangeHistoryTable = (function() {
+    var dialog = null;
+    var tbody = null;
+    var allChanges = [];
+    var filteredChanges = [];
+    var sortColumn = 'time';
+    var sortDirection = 'asc';
+    var selectedSignals = [];
+    var viewer = null;
+
+    function init(viewerRef) {
+      viewer = viewerRef;
+      dialog = document.getElementById('change-history-dialog');
+      tbody = document.getElementById('change-history-tbody');
+
+      if (!dialog) return;
+
+      document.getElementById('change-history-close').addEventListener('click', hide);
+      document.getElementById('change-history-download').addEventListener('click', downloadCSV);
+      document.getElementById('filter-reset').addEventListener('click', resetFilters);
+
+      document.getElementById('filter-edge-signal').addEventListener('change', applyFilters);
+      document.getElementById('filter-edge-type').addEventListener('change', applyFilters);
+      document.getElementById('filter-duration-min').addEventListener('input', applyFilters);
+      document.getElementById('filter-value-range').addEventListener('input', applyFilters);
+
+      var headers = dialog.querySelectorAll('.change-history-table th[data-sort]');
+      headers.forEach(function(th) {
+        th.addEventListener('click', function() {
+          var col = this.dataset.sort;
+          if (sortColumn === col) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortColumn = col;
+            sortDirection = 'asc';
+          }
+          updateSortIcons();
+          sortChanges();
+          render();
+        });
+      });
+
+      setupDrag();
+    }
+
+    function setupDrag() {
+      var header = dialog.querySelector('.change-history-header');
+      if (!header) return;
+
+      var isDragging = false;
+      var startX = 0;
+      var startY = 0;
+      var startLeft = 0;
+      var startTop = 0;
+
+      header.addEventListener('mousedown', function(e) {
+        if (e.target.classList.contains('dialog-close')) return;
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        dialog.style.left = dialog.offsetLeft + 'px';
+        dialog.style.top = dialog.offsetTop + 'px';
+        dialog.style.right = 'auto';
+        dialog.style.bottom = 'auto';
+        dialog.style.transform = 'none';
+
+        startLeft = dialog.offsetLeft;
+        startTop = dialog.offsetTop;
+
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', function(e) {
+        if (!isDragging) return;
+        var dx = e.clientX - startX;
+        var dy = e.clientY - startY;
+        dialog.style.left = (startLeft + dx) + 'px';
+        dialog.style.top = (startTop + dy) + 'px';
+      });
+
+      document.addEventListener('mouseup', function() {
+        isDragging = false;
+      });
+    }
+
+    function show(signalNames) {
+      selectedSignals = signalNames.slice();
+      allChanges = viewer.extractChangeHistory(signalNames);
+      filteredChanges = allChanges.slice();
+
+      populateEdgeSignalSelect();
+      resetFilters(true);
+
+      sortColumn = 'time';
+      sortDirection = 'asc';
+      updateSortIcons();
+      sortChanges();
+      render();
+
+      resetDialogPosition();
+      dialog.classList.remove('hidden');
+    }
+
+    function resetDialogPosition() {
+      dialog.style.left = '';
+      dialog.style.top = '';
+      dialog.style.right = '';
+      dialog.style.bottom = '';
+      dialog.style.transform = '';
+    }
+
+    function hide() {
+      dialog.classList.add('hidden');
+    }
+
+    function populateEdgeSignalSelect() {
+      var select = document.getElementById('filter-edge-signal');
+      select.innerHTML = '<option value="">所有信号</option>';
+      for (var i = 0; i < selectedSignals.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = selectedSignals[i];
+        opt.textContent = selectedSignals[i];
+        select.appendChild(opt);
+      }
+    }
+
+    function resetFilters(silent) {
+      document.getElementById('filter-edge-signal').value = '';
+      document.getElementById('filter-edge-type').value = 'any';
+      document.getElementById('filter-duration-min').value = '';
+      document.getElementById('filter-value-range').value = '';
+      if (!silent) {
+        applyFilters();
+      } else {
+        filteredChanges = allChanges.slice();
+        sortChanges();
+        render();
+      }
+    }
+
+    function applyFilters() {
+      var edgeSignal = document.getElementById('filter-edge-signal').value;
+      var edgeType = document.getElementById('filter-edge-type').value;
+      var durationMinStr = document.getElementById('filter-duration-min').value;
+      var valueRangeStr = document.getElementById('filter-value-range').value.trim();
+
+      var durationMin = durationMinStr !== '' ? parseFloat(durationMinStr) : null;
+      var valueFilter = parseValueFilter(valueRangeStr);
+
+      filteredChanges = allChanges.filter(function(change) {
+        if (edgeSignal && change.signal !== edgeSignal) return false;
+        if (edgeType !== 'any') {
+          if (edgeType === 'rise' && change.edgeType !== 'rise') return false;
+          if (edgeType === 'fall' && change.edgeType !== 'fall') return false;
+        }
+        if (durationMin !== null) {
+          if (change.duration === null || change.duration < durationMin) return false;
+        }
+        if (valueFilter && !testValueFilter(change.newValue, valueFilter)) return false;
+
+        return true;
+      });
+
+      sortChanges();
+      render();
+    }
+
+    function parseValueFilter(str) {
+      if (!str) return null;
+      var match = str.match(/^\s*(>=|<=|==|!=|>|<|=)\s*(-?\d+)\s*$/);
+      if (!match) return null;
+      var op = match[1];
+      if (op === '=') op = '==';
+      return { op: op, value: parseInt(match[2], 10) };
+    }
+
+    function testValueFilter(val, filter) {
+      if (typeof val !== 'number') return false;
+      switch (filter.op) {
+        case '==': return val === filter.value;
+        case '!=': return val !== filter.value;
+        case '>': return val > filter.value;
+        case '<': return val < filter.value;
+        case '>=': return val >= filter.value;
+        case '<=': return val <= filter.value;
+        default: return true;
+      }
+    }
+
+    function updateSortIcons() {
+      var headers = dialog.querySelectorAll('.change-history-table th');
+      headers.forEach(function(th) {
+        th.classList.remove('sorted-asc', 'sorted-desc');
+        if (th.dataset.sort === sortColumn) {
+          th.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        }
+      });
+    }
+
+    function sortChanges() {
+      filteredChanges.sort(function(a, b) {
+        var cmp = 0;
+        switch (sortColumn) {
+          case 'time':
+            cmp = a.time - b.time;
+            break;
+          case 'signal':
+            cmp = a.signal.localeCompare(b.signal);
+            break;
+          case 'duration':
+            var dA = a.duration === null ? Infinity : a.duration;
+            var dB = b.duration === null ? Infinity : b.duration;
+            cmp = dA - dB;
+            break;
+          default:
+            cmp = 0;
+        }
+        if (cmp === 0) {
+          cmp = a.time - b.time;
+          if (cmp === 0) cmp = a.signal.localeCompare(b.signal);
+        }
+        return sortDirection === 'asc' ? cmp : -cmp;
+      });
+    }
+
+    function render() {
+      var html = '';
+      for (var i = 0; i < filteredChanges.length; i++) {
+        var c = filteredChanges[i];
+        var edgeClass = '';
+        if (c.edgeType === 'rise') edgeClass = ' rise';
+        else if (c.edgeType === 'fall') edgeClass = ' fall';
+
+        html += '<tr>';
+        html += '<td class="time-col">' + c.time + '</td>';
+        html += '<td class="signal-col">' + c.signal + '</td>';
+        html += '<td class="old-value-col">' + formatValue(c.oldValue) + '</td>';
+        html += '<td class="new-value-col' + edgeClass + '">' + formatValue(c.newValue) + '</td>';
+        html += '<td class="duration-col">' + (c.duration !== null ? c.duration : '∞') + '</td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+      renderStats();
+    }
+
+    function formatValue(v) {
+      if (typeof v === 'number') {
+        if (v >= 10) {
+          return v + ' (0x' + v.toString(16).toUpperCase() + ')';
+        }
+        return String(v);
+      }
+      return String(v);
+    }
+
+    function renderStats() {
+      document.getElementById('stat-total-changes').textContent = filteredChanges.length;
+
+      var perSignal = {};
+      for (var i = 0; i < filteredChanges.length; i++) {
+        var sig = filteredChanges[i].signal;
+        perSignal[sig] = (perSignal[sig] || 0) + 1;
+      }
+
+      var perSignalEl = document.getElementById('stat-per-signal');
+      var perSignalHtml = '';
+      for (var sigName in perSignal) {
+        if (!perSignal.hasOwnProperty(sigName)) continue;
+        perSignalHtml += '<span class="stat-per-signal-item"><span class="stat-per-signal-name">' + sigName + '</span>' + perSignal[sigName] + '</span>';
+      }
+      perSignalEl.innerHTML = perSignalHtml;
+
+      var avgInterval = 0;
+      if (filteredChanges.length >= 2) {
+        var times = filteredChanges.map(function(c) { return c.time; }).sort(function(a, b) { return a - b; });
+        var total = 0;
+        for (var j = 1; j < times.length; j++) {
+          total += times[j] - times[j - 1];
+        }
+        avgInterval = total / (times.length - 1);
+      }
+      document.getElementById('stat-avg-interval').textContent = avgInterval.toFixed(2);
+    }
+
+    function downloadCSV() {
+      var lines = [];
+      lines.push('Time,Signal,OldValue,NewValue,Duration');
+
+      for (var i = 0; i < filteredChanges.length; i++) {
+        var c = filteredChanges[i];
+        lines.push([
+          c.time,
+          c.signal,
+          typeof c.oldValue === 'number' ? c.oldValue : '"' + c.oldValue + '"',
+          typeof c.newValue === 'number' ? c.newValue : '"' + c.newValue + '"',
+          c.duration !== null ? c.duration : ''
+        ].join(','));
+      }
+
+      var csvContent = lines.join('\n');
+      var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+      var timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      var signalPart = selectedSignals.slice(0, 5).join('_');
+      if (selectedSignals.length > 5) signalPart += '_and_more';
+      var filename = 'circuit_changes_' + signalPart + '_' + timestamp + '.csv';
+
+      var link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    }
+
+    return {
+      init: init,
+      show: show,
+      hide: hide
+    };
+
+  })();
+
+  Viewer.prototype.showChangeHistory = function() {
+    var signalNames = Array.from(this.selectedSignalsForExport);
+    if (signalNames.length === 0) return;
+    if (signalNames.length > this.MAX_SELECTED_SIGNALS) {
+      alert('最多只能同时选择 ' + this.MAX_SELECTED_SIGNALS + ' 个信号导出');
+      return;
+    }
+    ChangeHistoryTable.init(this);
+    ChangeHistoryTable.show(signalNames);
   };
 
   return Viewer;

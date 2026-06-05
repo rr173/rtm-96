@@ -198,6 +198,15 @@
     });
   }
 
+  var btnExportTable = document.getElementById('btn-export-table');
+  if (btnExportTable) {
+    btnExportTable.addEventListener('click', function() {
+      viewer.showChangeHistory();
+    });
+  }
+
+  viewer.updateExportButtonState();
+
   function runSimulation() {
     if (running) return;
 

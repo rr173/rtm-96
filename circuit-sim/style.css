@@ -2428,3 +2428,259 @@ html, body {
 #watch-context-menu .menu-danger:hover {
   background: rgba(243, 139, 168, 0.2);
 }
+
+.signal-label.table-selected {
+  box-shadow: inset 0 0 0 2px #89b4fa;
+  background: rgba(137, 180, 250, 0.15) !important;
+}
+
+.btn-export {
+  background: rgba(166, 227, 161, 0.2);
+  border-color: #a6e3a1;
+  color: #a6e3a1;
+}
+
+.btn-export:hover:not(:disabled) {
+  background: #a6e3a1;
+  color: var(--bg-primary);
+}
+
+.btn-export:disabled {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.change-history-dialog {
+  width: 900px;
+  max-width: 95vw;
+  min-width: 600px;
+  height: 700px;
+  max-height: 90vh;
+}
+
+.change-history-dialog .dialog-header {
+  cursor: move;
+  user-select: none;
+}
+
+.change-history-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-group label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.filter-group select,
+.filter-group input {
+  padding: 4px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.filter-group select {
+  min-width: 100px;
+}
+
+.filter-group input[type="number"] {
+  width: 70px;
+}
+
+.filter-group input[type="text"] {
+  width: 120px;
+}
+
+.filter-group select:focus,
+.filter-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#filter-reset {
+  margin-left: auto;
+}
+
+.change-history-table-container {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.change-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.change-history-table th {
+  background: var(--bg-surface);
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 2px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.change-history-table th:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.change-history-table th .sort-icon {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.change-history-table th.sorted-asc .sort-icon {
+  color: var(--accent);
+}
+
+.change-history-table th.sorted-asc::after {
+  content: '▲';
+  font-size: 10px;
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+.change-history-table th.sorted-desc .sort-icon {
+  color: var(--accent);
+}
+
+.change-history-table th.sorted-desc::after {
+  content: '▼';
+  font-size: 10px;
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+.change-history-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.change-history-table tbody tr:hover {
+  background: rgba(137, 180, 250, 0.08);
+}
+
+.change-history-table .time-col {
+  color: var(--yellow);
+  min-width: 100px;
+}
+
+.change-history-table .signal-col {
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.change-history-table .old-value-col {
+  color: var(--text-muted);
+  min-width: 80px;
+}
+
+.change-history-table .new-value-col {
+  color: var(--green);
+  min-width: 80px;
+}
+
+.change-history-table .new-value-col.rise {
+  color: #a6e3a1;
+}
+
+.change-history-table .new-value-col.fall {
+  color: #f38ba8;
+}
+
+.change-history-table .duration-col {
+  color: var(--orange);
+  min-width: 120px;
+}
+
+.change-history-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.change-history-stats strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.change-history-stats #stat-per-signal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.change-history-stats .stat-per-signal-item {
+  padding: 2px 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.change-history-stats .stat-per-signal-name {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.change-history-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 0 0 8px 8px;
+}
+
+.change-history-table-container:empty::after {
+  content: '暂无数据';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 14px;
+}

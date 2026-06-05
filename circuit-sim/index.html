@@ -87,6 +87,7 @@
         <div id="signal-list">
           <div id="signal-list-header">
             <input type="text" id="signal-filter" placeholder="🔍 搜索信号..." spellcheck="false">
+            <button id="btn-export-table" class="btn btn-small btn-export" disabled>📊 Export Table</button>
             <button id="btn-add-watch" class="btn btn-small">+ Add Watch</button>
             <button id="btn-new-group" class="btn btn-small">+ New Group</button>
           </div>
@@ -373,6 +374,60 @@
     <div class="dialog-footer">
       <button id="btn-cancel-edit-watch" class="btn">Cancel</button>
       <button id="btn-confirm-edit-watch" class="btn btn-primary">Update</button>
+    </div>
+  </div>
+
+  <div id="change-history-dialog" class="dialog change-history-dialog hidden">
+    <div class="dialog-header change-history-header">
+      <span>📊 Signal Change History</span>
+      <button id="change-history-close" class="dialog-close">✕</button>
+    </div>
+    <div class="dialog-body change-history-body">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label>边沿过滤:</label>
+          <select id="filter-edge-signal">
+            <option value="">所有信号</option>
+          </select>
+          <select id="filter-edge-type">
+            <option value="any">任意</option>
+            <option value="rise">上升沿</option>
+            <option value="fall">下降沿</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>持续时间(ns):</label>
+          <input type="number" id="filter-duration-min" min="0" placeholder="最小">
+        </div>
+        <div class="filter-group">
+          <label>值范围:</label>
+          <input type="text" id="filter-value-range" placeholder="e.g., >=1, ==0, >5">
+        </div>
+        <button id="filter-reset" class="btn btn-small">重置过滤</button>
+      </div>
+      <div class="change-history-table-container">
+        <table class="change-history-table">
+          <thead>
+            <tr>
+              <th data-sort="time">时间(ns) <span class="sort-icon">↕</span></th>
+              <th data-sort="signal">信号名 <span class="sort-icon">↕</span></th>
+              <th>旧值</th>
+              <th>新值</th>
+              <th data-sort="duration">持续时间(ns) <span class="sort-icon">↕</span></th>
+            </tr>
+          </thead>
+          <tbody id="change-history-tbody">
+          </tbody>
+        </table>
+      </div>
+      <div class="change-history-stats">
+        <span>总变化次数: <strong id="stat-total-changes">0</strong></span>
+        <span id="stat-per-signal"></span>
+        <span>平均变化间隔: <strong id="stat-avg-interval">0</strong> ns</span>
+      </div>
+    </div>
+    <div class="dialog-footer change-history-footer">
+      <button id="change-history-download" class="btn btn-primary">📥 Download CSV</button>
     </div>
   </div>
 </div>
