@@ -187,6 +187,9 @@ var WaveformViewer = (function() {
   };
 
   Viewer.prototype.clear = function() {
+    if (this.compareMode) {
+      this.exitCompareMode();
+    }
     this.data = null;
     this.signalNames = [];
     this.signalMap = {};
@@ -1455,6 +1458,11 @@ var WaveformViewer = (function() {
           ctx.fillText(item.groupName || '', 8, y + itemH / 2);
         } else if (item.type === 'bus') {
           if (this.compareMode && this.compareSnapshot) {
+            if (this.decoders[item.name]) {
+              this.drawSnapshotBusWaveform(ctx, item.name, y + DECODER_HEIGHT, w);
+            } else {
+              this.drawSnapshotBusWaveform(ctx, item.name, y, w);
+            }
             this.drawDiffHighlights(ctx, item.name, y, w);
           }
           if (this.decoders[item.name]) {
@@ -3078,6 +3086,89 @@ var WaveformViewer = (function() {
     }
 
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  };
+
+  Viewer.prototype.drawSnapshotBusWaveform = function(ctx, busName, baseY, canvasW) {
+    if (!this.compareSnapshot) return;
+
+    var snapBusWaveforms = this.compareSnapshot.busWaveforms;
+    var wf = snapBusWaveforms[busName];
+    if (!wf || wf.length === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+
+    ctx.beginPath();
+    ctx.rect(0, baseY, canvasW, BUS_HEIGHT);
+    ctx.clip();
+
+    ctx.strokeStyle = '#6c7086';
+    ctx.fillStyle = '#6c7086';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+
+    var startTime = this.scrollX / this.pixelsPerNs;
+    var endTime = (this.scrollX + canvasW) / this.pixelsPerNs;
+
+    var topY = baseY + 3;
+    var midY = baseY + BUS_HEIGHT / 2;
+    var botY = baseY + BUS_HEIGHT - 3;
+    var transW = Math.min(TRANSITION_WIDTH * 1.5, this.pixelsPerNs * 0.8);
+
+    ctx.beginPath();
+
+    var firstDrawn = false;
+    var prevVal = null;
+
+    for (var wi = 0; wi < wf.length; wi++) {
+      var evt = wf[wi];
+      if (evt.time > endTime + 10) break;
+
+      var x = evt.time * this.pixelsPerNs - this.scrollX;
+      var currVal = evt.value;
+
+      if (!firstDrawn) {
+        ctx.moveTo(Math.max(0, x - 1000), midY);
+        ctx.lineTo(x - transW, midY);
+        ctx.lineTo(x, currVal === prevVal ? midY : topY);
+        firstDrawn = true;
+      } else {
+        if (currVal === prevVal) {
+          ctx.lineTo(x, midY);
+        } else {
+          ctx.lineTo(x - transW, midY);
+          ctx.lineTo(x, topY);
+          ctx.lineTo(x + transW, midY);
+        }
+      }
+
+      prevVal = currVal;
+    }
+
+    if (firstDrawn) {
+      ctx.lineTo(canvasW + 10, midY);
+    }
+
+    ctx.stroke();
+
+    ctx.font = 'bold 10px ' + (window.getComputedStyle(document.body).fontFamily || 'monospace');
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+
+    for (var wi2 = 0; wi2 < wf.length; wi2++) {
+      var evt2 = wf[wi2];
+      if (evt2.time > endTime) break;
+      if (evt2.time < startTime) continue;
+
+      var x2 = evt2.time * this.pixelsPerNs - this.scrollX + 4;
+      if (x2 > canvasW - 40) break;
+
+      var label = '0x' + evt2.value.toString(16);
+      ctx.fillText(label, x2, midY);
+    }
+
     ctx.setLineDash([]);
     ctx.restore();
   };
