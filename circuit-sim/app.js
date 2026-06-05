@@ -1007,6 +1007,7 @@
     var selectedResultIndex = -1;
     var sortColumn = null;
     var sortDirection = 'asc';
+    var currentCombo = null;
 
     var MAX_PARAMS = 3;
     var MAX_METRICS = 5;
@@ -1426,7 +1427,30 @@
       btnCancelSweep.disabled = false;
       sweepProgress.classList.add('running');
 
+      initSweepWorker();
       runNextCombination();
+    }
+
+    function initSweepWorker() {
+      if (sweepWorker) {
+        try {
+          sweepWorker.terminate();
+        } catch (e) {}
+      }
+
+      try {
+        sweepWorker = new Worker('worker.js');
+        sweepWorker.onmessage = function(e) {
+          var msg = e.data;
+          handleSweepResult(msg);
+        };
+        sweepWorker.onerror = function(e) {
+          console.error('Sweep worker error:', e);
+          handleSweepResult({ type: 'error', message: e.message });
+        };
+      } catch (e) {
+        sweepWorker = null;
+      }
     }
 
     function runNextCombination() {
@@ -1435,73 +1459,61 @@
         return;
       }
 
-      var combo = combinations[currentComboIndex];
+      currentCombo = combinations[currentComboIndex];
       sweepProgress.textContent = (currentComboIndex + 1) + '/' + combinations.length;
 
       var source = editor.value;
-      var modifiedSource = applyParametersToSource(source, combo);
-      var clockPeriod = getClockPeriodFromCombo(combo);
-      var gateDelay = getGateDelayFromCombo(combo);
+      var modifiedSource = applyParametersToSource(source, currentCombo);
+      var clockPeriod = getClockPeriodFromCombo(currentCombo);
+      var gateDelay = getGateDelayFromCombo(currentCombo);
       var simDuration = parseInt(simDurationInput.value, 10) || 200;
 
-      try {
-        sweepWorker = new Worker('worker.js');
-      } catch (e) {
-        runCombinationFallback(modifiedSource, clockPeriod, simDuration, gateDelay, combo);
-        return;
-      }
-
-      sweepWorker.onmessage = function(e) {
-        var msg = e.data;
-        handleSweepResult(msg, combo);
-      };
-
-      sweepWorker.onerror = function(e) {
-        console.error('Sweep worker error:', e);
-        results.push({
-          combo: combo,
-          error: true,
-          metrics: {}
+      if (sweepWorker) {
+        sweepWorker.postMessage({
+          type: 'simulate',
+          source: modifiedSource,
+          clockPeriod: clockPeriod,
+          simDuration: simDuration,
+          gateDelay: gateDelay
         });
-        currentComboIndex++;
-        setTimeout(runNextCombination, 10);
-      };
-
-      sweepWorker.postMessage({
-        type: 'simulate',
-        source: modifiedSource,
-        clockPeriod: clockPeriod,
-        simDuration: simDuration,
-        gateDelay: gateDelay
-      });
+      } else {
+        runCombinationFallback(modifiedSource, clockPeriod, simDuration, gateDelay);
+      }
     }
 
-    function runCombinationFallback(source, clockPeriod, simDuration, gateDelay, combo) {
+    function runCombinationFallback(source, clockPeriod, simDuration, gateDelay) {
       try {
         var parseResult = CircuitParser.parse(source);
         if (parseResult.errors && parseResult.errors.length > 0) {
-          results.push({ combo: combo, error: true, metrics: {} });
+          handleSweepResult({ type: 'parseError', errors: parseResult.errors });
         } else {
           var netlist = parseResult.data;
+          if (!netlist.signals.clk) {
+            netlist.signals.clk = { name: 'clk', type: 'clk', isReg: false };
+          }
           var result = Simulator.simulate(netlist, clockPeriod, simDuration, gateDelay);
-          handleSweepResult(result, combo);
+          result.type = 'result';
+          var coverageData;
+          try {
+            if (typeof CoverageAnalyzer !== 'undefined' && CoverageAnalyzer.runFullAnalysis) {
+              coverageData = CoverageAnalyzer.runFullAnalysis(result, netlist);
+              result.coverageData = coverageData;
+            }
+          } catch (e) {}
+          handleSweepResult(result);
         }
       } catch (e) {
         console.error('Sweep fallback error:', e);
-        results.push({ combo: combo, error: true, metrics: {} });
-        currentComboIndex++;
-        setTimeout(runNextCombination, 10);
+        handleSweepResult({ type: 'error', message: e.message });
       }
     }
 
-    function handleSweepResult(msg, combo) {
-      if (sweepWorker) {
-        sweepWorker.terminate();
-        sweepWorker = null;
-      }
-
+    function handleSweepResult(msg) {
+      var combo = currentCombo;
       var metricValues = {};
-      if (msg.type === 'result' || msg.signalNames) {
+      var hasError = msg.type === 'parseError' || msg.type === 'error';
+
+      if (!hasError && (msg.type === 'result' || msg.signalNames)) {
         for (var i = 0; i < metrics.length; i++) {
           var m = metrics[i];
           metricValues[m.name] = extractMetric(msg, m);
@@ -1510,7 +1522,7 @@
 
       results.push({
         combo: combo,
-        error: msg.type === 'parseError' || msg.type === 'error',
+        error: hasError,
         metrics: metricValues,
         fullResult: msg
       });
@@ -1549,7 +1561,7 @@
           count++;
         }
       }
-      return Math.floor(count / 2);
+      return count;
     }
 
     function getAssertionViolations(result) {
@@ -1565,14 +1577,22 @@
 
     function getToggleCoverage(result) {
       if (result.coverageData && result.coverageData.toggleCoverage) {
-        return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.toggleCoverage));
+        try {
+          return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.toggleCoverage));
+        } catch (e) {
+          return 0;
+        }
       }
       return 0;
     }
 
     function getBranchCoverage(result) {
       if (result.coverageData && result.coverageData.branchCoverage) {
-        return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.branchCoverage));
+        try {
+          return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.branchCoverage));
+        } catch (e) {
+          return 0;
+        }
       }
       return 0;
     }
@@ -1580,7 +1600,9 @@
     function cancelSweep() {
       shouldCancel = true;
       if (sweepWorker) {
-        sweepWorker.terminate();
+        try {
+          sweepWorker.terminate();
+        } catch (e) {}
         sweepWorker = null;
       }
     }
@@ -1592,8 +1614,19 @@
       sweepProgress.classList.remove('running');
       sweepProgress.textContent = 'Done (' + results.length + '/' + combinations.length + ')';
 
+      if (sweepWorker) {
+        try {
+          sweepWorker.terminate();
+        } catch (e) {}
+        sweepWorker = null;
+      }
+
       if (results.length > 0) {
-        showResultsDialog();
+        try {
+          showResultsDialog();
+        } catch (e) {
+          console.error('Error showing results dialog:', e);
+        }
       }
     }
 
