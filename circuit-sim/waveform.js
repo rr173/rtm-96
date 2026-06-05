@@ -85,7 +85,8 @@ var WaveformViewer = (function() {
     this.collapsedGroups = {};
     this.filterText = '';
     this.filterDebounceTimer = null;
-    this.draggedItem = null;
+    this.dragType = null;
+    this.draggedId = null;
 
     this.buses = [];
     this.decoders = {};
@@ -502,10 +503,22 @@ var WaveformViewer = (function() {
     nameSpan.textContent = group.name;
     header.appendChild(nameSpan);
 
+    var dragStartPos = { x: 0, y: 0 };
+    var isDragging = false;
+
+    header.addEventListener('mousedown', function(e) {
+      dragStartPos = { x: e.clientX, y: e.clientY };
+      isDragging = false;
+    });
+
     header.addEventListener('click', function(e) {
-      if (e.target.classList.contains('group-toggle') || e.target.classList.contains('group-header')) {
+      if (!isDragging) {
         self.toggleGroup(group.id);
       }
+    });
+
+    header.addEventListener('dragstart', function(e) {
+      isDragging = true;
     });
 
     header.addEventListener('contextmenu', function(e) {
@@ -2526,12 +2539,15 @@ var WaveformViewer = (function() {
   Viewer.prototype.moveGroup = function(groupId, targetIndex) {
     var idx = this.signalGroups.findIndex(function(g) { return g.id === groupId; });
     if (idx === -1) return false;
-    if (idx === targetIndex || targetIndex === idx + 1) return true;
+
+    var adjustedTarget = targetIndex;
+    if (targetIndex > idx) adjustedTarget--;
+
+    if (idx === adjustedTarget) return true;
 
     var group = this.signalGroups[idx];
     this.signalGroups.splice(idx, 1);
-    if (targetIndex > idx) targetIndex--;
-    this.signalGroups.splice(targetIndex, 0, group);
+    this.signalGroups.splice(adjustedTarget, 0, group);
 
     this.buildSignalLabels();
     this.resize();
@@ -2553,32 +2569,35 @@ var WaveformViewer = (function() {
     var innerEl = document.getElementById('signal-list-inner');
     if (!innerEl) innerEl = this.signalListEl;
 
-    var dragType = null;
-    var draggedId = null;
+    self.dragType = null;
+    self.draggedId = null;
 
     innerEl.querySelectorAll('.signal-label, .group-header').forEach(function(el) {
       el.addEventListener('dragstart', function(e) {
         if (this.classList.contains('signal-label')) {
-          dragType = 'signal';
-          draggedId = this.dataset.signal;
+          self.dragType = 'signal';
+          self.draggedId = this.dataset.signal;
         } else if (this.classList.contains('group-header')) {
-          dragType = 'group';
-          draggedId = this.dataset.groupId;
+          self.dragType = 'group';
+          self.draggedId = this.dataset.groupId;
         }
         this.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', draggedId);
+        e.dataTransfer.setData('text/plain', self.draggedId);
+        e.stopPropagation();
       });
 
-      el.addEventListener('dragend', function() {
+      el.addEventListener('dragend', function(e) {
         this.classList.remove('dragging');
         self.clearDragOverClasses();
-        dragType = null;
-        draggedId = null;
+        self.dragType = null;
+        self.draggedId = null;
+        e.stopPropagation();
       });
 
       el.addEventListener('dragover', function(e) {
         e.preventDefault();
+        e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
 
         self.clearDragOverClasses();
@@ -2587,21 +2606,22 @@ var WaveformViewer = (function() {
         var midY = rect.top + rect.height / 2;
         var isTop = e.clientY < midY;
 
-        if (dragType === 'signal') {
+        if (self.dragType === 'signal') {
           if (this.classList.contains('signal-label') && !self.clockSignals[this.dataset.signal]) {
             this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
           } else if (this.classList.contains('group-header')) {
             this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
           }
-        } else if (dragType === 'group') {
+        } else if (self.dragType === 'group') {
           if (this.classList.contains('group-header')) {
             this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
           }
         }
       });
 
-      el.addEventListener('dragleave', function() {
+      el.addEventListener('dragleave', function(e) {
         self.clearDragOverClasses();
+        e.stopPropagation();
       });
 
       el.addEventListener('drop', function(e) {
@@ -2609,65 +2629,76 @@ var WaveformViewer = (function() {
         e.stopPropagation();
         self.clearDragOverClasses();
 
-        if (!dragType || !draggedId) return;
+        if (!self.dragType || !self.draggedId) return;
 
         var rect = this.getBoundingClientRect();
         var midY = rect.top + rect.height / 2;
         var isTop = e.clientY < midY;
 
-        if (dragType === 'signal') {
+        if (self.dragType === 'signal') {
           if (this.classList.contains('signal-label')) {
             var targetSignal = this.dataset.signal;
             if (self.clockSignals[targetSignal]) return;
+            if (targetSignal === self.draggedId) return;
 
             var targetLoc = self.getSignalLocation(targetSignal);
             if (targetLoc) {
               var targetIndex = isTop ? targetLoc.index : targetLoc.index + 1;
               var targetGroupId = targetLoc.type === 'group' ? targetLoc.groupId : null;
-              self.moveSignalToGroup(draggedId, targetGroupId, targetIndex);
+              self.moveSignalToGroup(self.draggedId, targetGroupId, targetIndex);
             }
           } else if (this.classList.contains('group-header')) {
             var targetGroupId = this.dataset.groupId;
             var groupIdx = self.signalGroups.findIndex(function(g) { return g.id === targetGroupId; });
             if (isTop) {
               if (groupIdx === 0) {
-                self.moveSignalToGroup(draggedId, null, 0);
+                self.moveSignalToGroup(self.draggedId, null, 0);
               } else {
                 var prevGroup = self.signalGroups[groupIdx - 1];
-                self.moveSignalToGroup(draggedId, prevGroup.id, prevGroup.signals.length);
+                self.moveSignalToGroup(self.draggedId, prevGroup.id, prevGroup.signals.length);
               }
             } else {
-              self.moveSignalToGroup(draggedId, targetGroupId, 0);
+              self.moveSignalToGroup(self.draggedId, targetGroupId, 0);
             }
           }
-        } else if (dragType === 'group' && this.classList.contains('group-header')) {
-          var targetGroupIdx = self.signalGroups.findIndex(function(g) { return g.id === this.dataset.groupId; }.bind(this));
+        } else if (self.dragType === 'group' && this.classList.contains('group-header')) {
+          var targetGroupId = this.dataset.groupId;
+          if (targetGroupId === self.draggedId) return;
+
+          var targetGroupIdx = self.signalGroups.findIndex(function(g) { return g.id === targetGroupId; });
           var insertIdx = isTop ? targetGroupIdx : targetGroupIdx + 1;
-          self.moveGroup(draggedId, insertIdx);
+          self.moveGroup(self.draggedId, insertIdx);
         }
+
+        self.dragType = null;
+        self.draggedId = null;
       });
     });
 
     var ungroupedSection = innerEl.querySelector('.ungrouped-section');
     if (ungroupedSection) {
       ungroupedSection.addEventListener('dragover', function(e) {
-        if (dragType !== 'signal') return;
+        if (self.dragType !== 'signal') return;
         e.preventDefault();
+        e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
         self.clearDragOverClasses();
         ungroupedSection.classList.add('drag-over-bottom');
       });
 
-      ungroupedSection.addEventListener('dragleave', function() {
+      ungroupedSection.addEventListener('dragleave', function(e) {
         self.clearDragOverClasses();
+        e.stopPropagation();
       });
 
       ungroupedSection.addEventListener('drop', function(e) {
-        if (dragType !== 'signal') return;
+        if (self.dragType !== 'signal') return;
         e.preventDefault();
         e.stopPropagation();
         self.clearDragOverClasses();
-        self.moveSignalToGroup(draggedId, null, -1);
+        self.moveSignalToGroup(self.draggedId, null, -1);
+        self.dragType = null;
+        self.draggedId = null;
       });
     }
 
@@ -2675,14 +2706,17 @@ var WaveformViewer = (function() {
     if (signalList) {
       signalList.addEventListener('dragover', function(e) {
         e.preventDefault();
+        e.stopPropagation();
       });
 
       signalList.addEventListener('drop', function(e) {
-        if (dragType !== 'signal') return;
+        if (self.dragType !== 'signal') return;
         e.preventDefault();
         e.stopPropagation();
         self.clearDragOverClasses();
-        self.moveSignalToGroup(draggedId, null, -1);
+        self.moveSignalToGroup(self.draggedId, null, -1);
+        self.dragType = null;
+        self.draggedId = null;
       });
     }
   };
