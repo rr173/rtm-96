@@ -41,8 +41,22 @@
     <div id="divider" title="Drag to resize"></div>
     <div id="waveform-panel">
       <div class="panel-header">
-        <span>Waveform Viewer</span>
-        <span id="sim-status" class="status-idle">Idle</span>
+        <div class="panel-header-left">
+          <span>Waveform Viewer</span>
+          <span id="snapshot-count" class="snapshot-count">Snapshots: 0/5</span>
+        </div>
+        <div class="panel-header-right">
+          <button id="btn-save-snapshot" class="btn btn-small">💾 Save Snapshot</button>
+          <div class="compare-dropdown">
+            <button id="btn-compare" class="btn btn-small dropdown-btn">📊 Compare ▾</button>
+            <div id="compare-dropdown-menu" class="dropdown-menu hidden">
+              <div id="compare-snapshot-list"></div>
+              <div class="dropdown-divider"></div>
+              <button id="btn-exit-compare" class="dropdown-item hidden">Exit Compare Mode</button>
+            </div>
+          </div>
+          <span id="sim-status" class="status-idle">Idle</span>
+        </div>
       </div>
       <div id="cursor-toolbar">
         <button id="btn-set-cursor-a" class="btn btn-cursor btn-cursor-a">Set A</button>
@@ -79,6 +93,13 @@
         </div>
         <canvas id="waveform-canvas"></canvas>
         <div id="cursor-tooltip" class="hidden"></div>
+        <div id="diff-summary-panel" class="hidden">
+          <div class="diff-summary-header">
+            <span>📊 Diff Summary</span>
+            <button id="diff-summary-close">✕</button>
+          </div>
+          <div id="diff-summary-body"></div>
+        </div>
       </div>
     </div>
     <div id="coverage-panel" class="hidden">
@@ -221,6 +242,23 @@
     <div class="dialog-footer">
       <button id="btn-cancel-decoder" class="btn">Cancel</button>
       <button id="btn-create-decoder" class="btn btn-primary">Attach Decoder</button>
+    </div>
+  </div>
+
+  <div id="save-snapshot-dialog" class="dialog hidden">
+    <div class="dialog-header">
+      <span>💾 Save Snapshot</span>
+      <button class="dialog-close" data-dialog="save-snapshot-dialog">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-row">
+        <label>Snapshot Name:</label>
+        <input type="text" id="snapshot-name-input" placeholder="输入快照名称（留空使用时间戳）">
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-cancel-snapshot" class="btn">Cancel</button>
+      <button id="btn-confirm-snapshot" class="btn btn-primary">Save</button>
     </div>
   </div>
 </div>

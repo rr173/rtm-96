@@ -1499,6 +1499,314 @@ html, body {
   min-width: 70px;
 }
 
+.panel-header-left,
+.panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.snapshot-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.compare-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  z-index: 1000;
+  min-width: 180px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.dropdown-item:hover {
+  background: var(--bg-hover);
+}
+
+.dropdown-item.exit-compare {
+  color: var(--red);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.snapshot-item:hover {
+  background: var(--bg-hover);
+}
+
+.snapshot-item-name {
+  flex: 1;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-item-time {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+
+.snapshot-item-delete {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--red);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  transition: opacity 0.1s;
+}
+
+.snapshot-item:hover .snapshot-item-delete {
+  opacity: 1;
+}
+
+.diff-icon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 3px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.diff-icon.diff-same {
+  color: var(--green);
+  background: rgba(166, 227, 161, 0.15);
+}
+
+.diff-icon.diff-different {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.15);
+}
+
+.diff-icon.diff-new {
+  color: var(--accent);
+  background: rgba(137, 180, 250, 0.15);
+}
+
+.diff-icon.diff-deleted {
+  color: var(--text-muted);
+  background: rgba(108, 112, 134, 0.15);
+}
+
+.signal-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-percent-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  background: rgba(250, 179, 135, 0.2);
+  color: var(--orange);
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.signal-label.signal-diff-same {
+  border-left: 3px solid var(--green) !important;
+}
+
+.signal-label.signal-diff-different {
+  border-left: 3px solid var(--red) !important;
+}
+
+.signal-label.signal-diff-new {
+  border-left: 3px solid var(--accent) !important;
+  background: rgba(137, 180, 250, 0.05) !important;
+}
+
+.signal-label.signal-diff-deleted {
+  border-left: 3px solid var(--text-muted) !important;
+  background: rgba(108, 112, 134, 0.1) !important;
+  opacity: 0.6;
+}
+
+.signal-label.signal-diff-deleted .signal-name {
+  text-decoration: line-through;
+}
+
+#diff-summary-panel {
+  position: absolute;
+  right: 10px;
+  top: 30px;
+  width: 220px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  z-index: 50;
+  max-height: calc(100% - 50px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#diff-summary-panel.hidden {
+  display: none;
+}
+
+.diff-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.diff-summary-header button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.diff-summary-header button:hover {
+  color: var(--text-primary);
+}
+
+#diff-summary-body {
+  padding: 10px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.diff-summary-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.diff-stat-label {
+  color: var(--text-muted);
+}
+
+.diff-stat-value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.diff-summary-section {
+  margin-top: 10px;
+}
+
+.diff-section-header {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.diff-signal-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border-radius: 3px;
+  margin-bottom: 2px;
+}
+
+.diff-signal-item.clickable {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.diff-signal-item.clickable:hover {
+  background: var(--bg-hover);
+}
+
+.diff-signal-item.new-signal {
+  color: var(--accent);
+}
+
+.diff-signal-item.deleted-signal {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.diff-signal-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.diff-percent {
+  color: var(--orange);
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .search-result-desc {
   color: var(--text-primary);
   font-weight: 600;

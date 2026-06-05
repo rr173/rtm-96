@@ -80,6 +80,12 @@ var WaveformViewer = (function() {
     this.assertionStatus = {};
     this.highlightedAssertion = null;
 
+    this.snapshots = [];
+    this.maxSnapshots = 5;
+    this.compareMode = false;
+    this.compareSnapshot = null;
+    this.diffResults = null;
+
     this.signalGroups = [];
     this.ungroupedSignals = [];
     this.collapsedGroups = {};
@@ -403,6 +409,19 @@ var WaveformViewer = (function() {
     label.dataset.type = 'signal';
     label.draggable = true;
 
+    if (this.compareMode && this.diffResults && this.diffResults.signalDiffs[name]) {
+      var diffInfo = this.diffResults.signalDiffs[name];
+      if (diffInfo.status === 'same') {
+        label.classList.add('signal-diff-same');
+      } else if (diffInfo.status === 'different') {
+        label.classList.add('signal-diff-different');
+      } else if (diffInfo.status === 'new') {
+        label.classList.add('signal-diff-new');
+      } else if (diffInfo.status === 'deleted') {
+        label.classList.add('signal-diff-deleted');
+      }
+    }
+
     var covStatus = 'normal';
     var toggleCount = 0;
     var toggleStats = (this.coverageData && CoverageAnalyzer.extractStats(this.coverageData.toggleCoverage)) || {};
@@ -420,8 +439,35 @@ var WaveformViewer = (function() {
       label.style.background = this.domainColorMap[sig.clockDomain].bg;
     }
 
+    if (this.compareMode) {
+      var diffIcon = document.createElement('span');
+      diffIcon.className = 'diff-icon';
+      if (this.diffResults && this.diffResults.signalDiffs[name]) {
+        var diffInfo = this.diffResults.signalDiffs[name];
+        if (diffInfo.status === 'same') {
+          diffIcon.textContent = '=';
+          diffIcon.title = '信号完全相同';
+          diffIcon.classList.add('diff-same');
+        } else if (diffInfo.status === 'different') {
+          diffIcon.textContent = '≠';
+          diffIcon.title = '信号存在差异';
+          diffIcon.classList.add('diff-different');
+        } else if (diffInfo.status === 'new') {
+          diffIcon.textContent = '+';
+          diffIcon.title = '新增信号';
+          diffIcon.classList.add('diff-new');
+        } else if (diffInfo.status === 'deleted') {
+          diffIcon.textContent = '−';
+          diffIcon.title = '已删除信号';
+          diffIcon.classList.add('diff-deleted');
+        }
+      }
+      label.appendChild(diffIcon);
+    }
+
     var nameSpan = document.createElement('span');
     nameSpan.textContent = name;
+    nameSpan.className = 'signal-name';
     label.appendChild(nameSpan);
 
     var toggleSpan = document.createElement('span');
@@ -448,6 +494,17 @@ var WaveformViewer = (function() {
       typeSpan.textContent = 'WIRE';
     }
     label.appendChild(typeSpan);
+
+    if (this.compareMode && this.diffResults && this.diffResults.signalDiffs[name]) {
+      var diffInfo = this.diffResults.signalDiffs[name];
+      if (diffInfo.status === 'different' && diffInfo.diffPercent > 0) {
+        var diffPercentSpan = document.createElement('span');
+        diffPercentSpan.className = 'diff-percent-badge';
+        diffPercentSpan.textContent = 'Δ' + diffInfo.diffPercent + '%';
+        diffPercentSpan.title = '差异时间占比';
+        label.appendChild(diffPercentSpan);
+      }
+    }
 
     var hasGlitch = false;
     for (var g = 0; g < this.glitches.length; g++) {
@@ -1397,6 +1454,9 @@ var WaveformViewer = (function() {
           ctx.textBaseline = 'middle';
           ctx.fillText(item.groupName || '', 8, y + itemH / 2);
         } else if (item.type === 'bus') {
+          if (this.compareMode && this.compareSnapshot) {
+            this.drawDiffHighlights(ctx, item.name, y, w);
+          }
           if (this.decoders[item.name]) {
             this.drawDecoderLayer(ctx, item.name, y, w);
             this.drawBusWaveform(ctx, item.name, y + DECODER_HEIGHT, w);
@@ -1404,6 +1464,10 @@ var WaveformViewer = (function() {
             this.drawBusWaveform(ctx, item.name, y, w);
           }
         } else {
+          if (this.compareMode && this.compareSnapshot) {
+            this.drawSnapshotWaveform(ctx, item.name, y, w);
+            this.drawDiffHighlights(ctx, item.name, y, w);
+          }
           this.drawSignalWaveform(ctx, item.name, y, w);
         }
       }
@@ -2719,6 +2783,454 @@ var WaveformViewer = (function() {
         self.draggedId = null;
       });
     }
+  };
+
+  Viewer.prototype.deepClone = function(obj) {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) {
+      return obj.map(function(item) { return this.deepClone(item); }.bind(this));
+    }
+    var cloned = {};
+    for (var key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        cloned[key] = this.deepClone(obj[key]);
+      }
+    }
+    return cloned;
+  };
+
+  Viewer.prototype.saveSnapshot = function(name) {
+    if (!this.waveforms || Object.keys(this.waveforms).length === 0) {
+      return false;
+    }
+
+    var timestamp = new Date().toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).replace(/\//g, '-');
+
+    var snapshot = {
+      id: 'snap_' + Date.now(),
+      name: name || ('Snapshot ' + timestamp),
+      createdAt: Date.now(),
+      signalNames: this.deepClone(this.signalNames),
+      signalMap: this.deepClone(this.signalMap),
+      waveforms: this.deepClone(this.waveforms),
+      clocks: this.deepClone(this.clocks),
+      buses: this.deepClone(this.buses),
+      busWaveforms: this.deepClone(this.busWaveforms)
+    };
+
+    this.snapshots.push(snapshot);
+
+    while (this.snapshots.length > this.maxSnapshots) {
+      this.snapshots.shift();
+    }
+
+    this.updateSnapshotCount();
+    return true;
+  };
+
+  Viewer.prototype.deleteSnapshot = function(snapshotId) {
+    var idx = this.snapshots.findIndex(function(s) { return s.id === snapshotId; });
+    if (idx !== -1) {
+      this.snapshots.splice(idx, 1);
+      if (this.compareMode && this.compareSnapshot && this.compareSnapshot.id === snapshotId) {
+        this.exitCompareMode();
+      }
+      this.updateSnapshotCount();
+    }
+  };
+
+  Viewer.prototype.updateSnapshotCount = function() {
+    var countEl = document.getElementById('snapshot-count');
+    if (countEl) {
+      countEl.textContent = this.snapshots.length + '/' + this.maxSnapshots;
+    }
+  };
+
+  Viewer.prototype.enterCompareMode = function(snapshotId) {
+    var snapshot = this.snapshots.find(function(s) { return s.id === snapshotId; });
+    if (!snapshot) return false;
+
+    this.compareMode = true;
+    this.compareSnapshot = snapshot;
+    this.computeDifferences();
+    this.buildSignalLabels();
+    this.draw();
+    this.showDiffSummary();
+    return true;
+  };
+
+  Viewer.prototype.exitCompareMode = function() {
+    this.compareMode = false;
+    this.compareSnapshot = null;
+    this.diffResults = null;
+    this.buildSignalLabels();
+    this.draw();
+    this.hideDiffSummary();
+  };
+
+  Viewer.prototype.getSignalValueAtTime = function(waveforms, signalName, time) {
+    var wf = waveforms[signalName];
+    if (!wf || wf.length === 0) return 'x';
+
+    var val = wf[0].value;
+    for (var i = 0; i < wf.length; i++) {
+      if (wf[i].time <= time) {
+        val = wf[i].value;
+      } else {
+        break;
+      }
+    }
+    return val;
+  };
+
+  Viewer.prototype.getWaveformEndTime = function(waveforms) {
+    var maxTime = 0;
+    for (var sigName in waveforms) {
+      if (waveforms.hasOwnProperty(sigName)) {
+        var wf = waveforms[sigName];
+        if (wf && wf.length > 0) {
+          var lastTime = wf[wf.length - 1].time;
+          if (lastTime > maxTime) maxTime = lastTime;
+        }
+      }
+    }
+    return maxTime;
+  };
+
+  Viewer.prototype.computeDifferences = function() {
+    if (!this.compareMode || !this.compareSnapshot) return;
+
+    var snapWaveforms = this.compareSnapshot.waveforms;
+    var currWaveforms = this.waveforms;
+
+    var allSignalNames = {};
+    for (var i = 0; i < this.signalNames.length; i++) {
+      allSignalNames[this.signalNames[i]] = 'current';
+    }
+    for (var j = 0; j < this.compareSnapshot.signalNames.length; j++) {
+      var snapName = this.compareSnapshot.signalNames[j];
+      if (!allSignalNames[snapName]) {
+        allSignalNames[snapName] = 'deleted';
+      } else {
+        allSignalNames[snapName] = 'both';
+      }
+    }
+
+    var maxCurrTime = this.getWaveformEndTime(currWaveforms);
+    var maxSnapTime = this.getWaveformEndTime(snapWaveforms);
+    var maxTime = Math.max(maxCurrTime, maxSnapTime);
+
+    var diffResults = {
+      signalDiffs: {},
+      totalSignals: 0,
+      diffSignals: 0,
+      firstDiffTime: null,
+      deletedSignals: [],
+      newSignals: []
+    };
+
+    var sampleInterval = Math.max(1, Math.floor(maxTime / 1000));
+    if (sampleInterval < 1) sampleInterval = 1;
+
+    for (var sigName in allSignalNames) {
+      if (!allSignalNames.hasOwnProperty(sigName)) continue;
+
+      var sigStatus = allSignalNames[sigName];
+      diffResults.totalSignals++;
+
+      if (sigStatus === 'deleted') {
+        diffResults.deletedSignals.push(sigName);
+        diffResults.signalDiffs[sigName] = {
+          status: 'deleted',
+          diffIntervals: [],
+          diffPercent: 100
+        };
+        diffResults.diffSignals++;
+      } else if (sigStatus === 'current' && !snapWaveforms[sigName]) {
+        diffResults.newSignals.push(sigName);
+        diffResults.signalDiffs[sigName] = {
+          status: 'new',
+          diffIntervals: [],
+          diffPercent: 100
+        };
+        diffResults.diffSignals++;
+      } else {
+        var currWf = currWaveforms[sigName];
+        var snapWf = snapWaveforms[sigName];
+
+        if (!currWf || !snapWf) continue;
+
+        var diffIntervals = [];
+        var inDiff = false;
+        var diffStart = 0;
+        var totalDiffTime = 0;
+        var firstSignalDiffTime = null;
+
+        for (var t = 0; t <= maxTime; t += sampleInterval) {
+          var currVal = this.getSignalValueAtTime(currWaveforms, sigName, t);
+          var snapVal = this.getSignalValueAtTime(snapWaveforms, sigName, t);
+
+          if (currVal !== snapVal) {
+            if (!inDiff) {
+              inDiff = true;
+              diffStart = t;
+              if (firstSignalDiffTime === null) firstSignalDiffTime = t;
+              if (diffResults.firstDiffTime === null || t < diffResults.firstDiffTime) {
+                diffResults.firstDiffTime = t;
+              }
+            }
+          } else {
+            if (inDiff) {
+              inDiff = false;
+              diffIntervals.push({ start: diffStart, end: t });
+              totalDiffTime += (t - diffStart);
+            }
+          }
+        }
+
+        if (inDiff) {
+          diffIntervals.push({ start: diffStart, end: maxTime });
+          totalDiffTime += (maxTime - diffStart);
+        }
+
+        var diffPercent = maxTime > 0 ? Math.round((totalDiffTime / maxTime) * 100) : 0;
+
+        diffResults.signalDiffs[sigName] = {
+          status: diffIntervals.length > 0 ? 'different' : 'same',
+          diffIntervals: diffIntervals,
+          diffPercent: diffPercent,
+          firstDiffTime: firstSignalDiffTime
+        };
+
+        if (diffIntervals.length > 0) {
+          diffResults.diffSignals++;
+        }
+      }
+    }
+
+    this.diffResults = diffResults;
+  };
+
+  Viewer.prototype.drawSnapshotWaveform = function(ctx, name, baseY, canvasW) {
+    if (!this.compareSnapshot) return;
+
+    var snapWaveforms = this.compareSnapshot.waveforms;
+    var wf = snapWaveforms[name];
+    if (!wf || wf.length === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+
+    ctx.beginPath();
+    ctx.rect(0, baseY, canvasW, SIGNAL_HEIGHT);
+    ctx.clip();
+
+    var highY = baseY + HIGH_Y_OFFSET;
+    var lowY = baseY + LOW_Y_OFFSET;
+    var transW = Math.min(TRANSITION_WIDTH, this.pixelsPerNs * 0.8);
+
+    ctx.strokeStyle = '#6c7086';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+
+    ctx.beginPath();
+
+    var startTime = this.scrollX / this.pixelsPerNs;
+    var endTime = (this.scrollX + canvasW) / this.pixelsPerNs;
+
+    var firstDrawn = false;
+    var prevY = lowY;
+
+    for (var wi = 0; wi < wf.length; wi++) {
+      var evt = wf[wi];
+      if (evt.time > endTime + 10) break;
+
+      var x = evt.time * this.pixelsPerNs - this.scrollX;
+      var targetY = evt.value ? highY : lowY;
+
+      if (!firstDrawn) {
+        if (wi === 0) {
+          var initX = Math.max(0, x - 1000);
+          ctx.moveTo(initX, targetY);
+          ctx.lineTo(x, targetY);
+        } else {
+          var prevEvt = wf[wi - 1];
+          var prevEvtY = prevEvt.value ? highY : lowY;
+          var prevEvtX = prevEvt.time * this.pixelsPerNs - this.scrollX;
+          ctx.moveTo(prevEvtX, prevEvtY);
+          ctx.lineTo(x - transW, prevEvtY);
+          ctx.lineTo(x, targetY);
+        }
+        firstDrawn = true;
+      } else {
+        ctx.lineTo(x - transW, prevY);
+        ctx.lineTo(x, targetY);
+      }
+
+      prevY = targetY;
+    }
+
+    if (firstDrawn) {
+      ctx.lineTo(canvasW + 10, prevY);
+    }
+
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  };
+
+  Viewer.prototype.drawDiffHighlights = function(ctx, name, baseY, canvasW) {
+    if (!this.diffResults || !this.diffResults.signalDiffs[name]) return;
+
+    var diffInfo = this.diffResults.signalDiffs[name];
+    if (diffInfo.status !== 'different') return;
+
+    var startTime = this.scrollX / this.pixelsPerNs;
+    var endTime = (this.scrollX + canvasW) / this.pixelsPerNs;
+
+    ctx.save();
+
+    for (var i = 0; i < diffInfo.diffIntervals.length; i++) {
+      var interval = diffInfo.diffIntervals[i];
+      if (interval.end < startTime || interval.start > endTime) continue;
+
+      var startX = interval.start * this.pixelsPerNs - this.scrollX;
+      var endX = interval.end * this.pixelsPerNs - this.scrollX;
+
+      startX = Math.max(0, startX);
+      endX = Math.min(canvasW, endX);
+
+      ctx.fillStyle = 'rgba(250, 179, 135, 0.25)';
+      ctx.fillRect(startX, baseY, endX - startX, SIGNAL_HEIGHT);
+
+      ctx.strokeStyle = 'rgba(250, 179, 135, 0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+
+      var startVisible = interval.start >= startTime && interval.start <= endTime;
+      var endVisible = interval.end >= startTime && interval.end <= endTime;
+
+      if (startVisible) {
+        ctx.beginPath();
+        ctx.moveTo(startX, baseY);
+        ctx.lineTo(startX, baseY + SIGNAL_HEIGHT);
+        ctx.stroke();
+      }
+
+      if (endVisible) {
+        ctx.beginPath();
+        ctx.moveTo(endX, baseY);
+        ctx.lineTo(endX, baseY + SIGNAL_HEIGHT);
+        ctx.stroke();
+      }
+    }
+
+    ctx.setLineDash([]);
+    ctx.restore();
+  };
+
+  Viewer.prototype.showDiffSummary = function() {
+    var panel = document.getElementById('diff-summary-panel');
+    if (!panel || !this.diffResults) return;
+
+    panel.classList.remove('hidden');
+
+    var self = this;
+    var bodyEl = document.getElementById('diff-summary-body');
+    if (!bodyEl) return;
+
+    var html = '';
+    html += '<div class="diff-summary-stat">';
+    html += '<span class="diff-stat-label">差异信号:</span>';
+    html += '<span class="diff-stat-value" style="color:' + (this.diffResults.diffSignals > 0 ? '#f38ba8' : '#a6e3a1') + ';">';
+    html += this.diffResults.diffSignals + '/' + this.diffResults.totalSignals;
+    html += '</span></div>';
+
+    if (this.diffResults.firstDiffTime !== null) {
+      html += '<div class="diff-summary-stat">';
+      html += '<span class="diff-stat-label">首个差异:</span>';
+      html += '<span class="diff-stat-value mono">' + this.diffResults.firstDiffTime + 'ns</span>';
+      html += '</div>';
+    }
+
+    if (this.diffResults.newSignals.length > 0) {
+      html += '<div class="diff-summary-section">';
+      html += '<div class="diff-section-header" style="color:#89b4fa;">✚ 新增信号 (' + this.diffResults.newSignals.length + ')</div>';
+      for (var ni = 0; ni < this.diffResults.newSignals.length; ni++) {
+        html += '<div class="diff-signal-item new-signal">' + this.diffResults.newSignals[ni] + '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (this.diffResults.deletedSignals.length > 0) {
+      html += '<div class="diff-summary-section">';
+      html += '<div class="diff-section-header" style="color:#6c7086;">✖ 已删除 (' + this.diffResults.deletedSignals.length + ')</div>';
+      for (var di = 0; di < this.diffResults.deletedSignals.length; di++) {
+        html += '<div class="diff-signal-item deleted-signal">' + this.diffResults.deletedSignals[di] + '</div>';
+      }
+      html += '</div>';
+    }
+
+    var diffSignalsList = [];
+    for (var sigName in this.diffResults.signalDiffs) {
+      if (!this.diffResults.signalDiffs.hasOwnProperty(sigName)) continue;
+      var diff = this.diffResults.signalDiffs[sigName];
+      if (diff.status === 'different') {
+        diffSignalsList.push({ name: sigName, diff: diff });
+      }
+    }
+
+    diffSignalsList.sort(function(a, b) {
+      return b.diff.diffPercent - a.diff.diffPercent;
+    });
+
+    if (diffSignalsList.length > 0) {
+      html += '<div class="diff-summary-section">';
+      html += '<div class="diff-section-header" style="color:#fab387;">⚠ 差异信号</div>';
+      for (var si = 0; si < diffSignalsList.length; si++) {
+        var item = diffSignalsList[si];
+        html += '<div class="diff-signal-item clickable" data-signal="' + item.name + '">';
+        html += '<span class="diff-signal-name">' + item.name + '</span>';
+        html += '<span class="diff-percent">Δ' + item.diff.diffPercent + '%</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    bodyEl.innerHTML = html;
+
+    bodyEl.querySelectorAll('.diff-signal-item.clickable').forEach(function(el) {
+      el.addEventListener('click', function() {
+        var sigName = this.dataset.signal;
+        self.navigateToFirstDiff(sigName);
+      });
+    });
+  };
+
+  Viewer.prototype.hideDiffSummary = function() {
+    var panel = document.getElementById('diff-summary-panel');
+    if (panel) {
+      panel.classList.add('hidden');
+    }
+  };
+
+  Viewer.prototype.navigateToFirstDiff = function(signalName) {
+    if (!this.diffResults || !this.diffResults.signalDiffs[signalName]) return;
+
+    var diffInfo = this.diffResults.signalDiffs[signalName];
+    if (diffInfo.firstDiffTime === null) return;
+
+    var targetTime = diffInfo.firstDiffTime;
+    var centerX = this.displayWidth / 2;
+    this.scrollX = targetTime * this.pixelsPerNs - centerX;
+    this.scrollX = Math.max(0, this.scrollX);
+
+    this.highlightedSignal = signalName;
+    this.buildSignalLabels();
+    this.draw();
   };
 
   return Viewer;

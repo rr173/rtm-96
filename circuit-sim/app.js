@@ -859,4 +859,140 @@
     }
   });
 
+  var btnSaveSnapshot = document.getElementById('btn-save-snapshot');
+  var btnCompare = document.getElementById('btn-compare');
+  var compareDropdownMenu = document.getElementById('compare-dropdown-menu');
+  var compareSnapshotList = document.getElementById('compare-snapshot-list');
+  var btnExitCompare = document.getElementById('btn-exit-compare');
+  var saveSnapshotDialog = document.getElementById('save-snapshot-dialog');
+  var snapshotNameInput = document.getElementById('snapshot-name-input');
+  var btnConfirmSnapshot = document.getElementById('btn-confirm-snapshot');
+  var btnCancelSnapshot = document.getElementById('btn-cancel-snapshot');
+  var diffSummaryClose = document.getElementById('diff-summary-close');
+
+  if (btnSaveSnapshot) {
+    btnSaveSnapshot.addEventListener('click', function() {
+      if (!viewer.waveforms || Object.keys(viewer.waveforms).length === 0) {
+        alert('请先运行仿真以生成波形数据');
+        return;
+      }
+      snapshotNameInput.value = '';
+      saveSnapshotDialog.classList.remove('hidden');
+      snapshotNameInput.focus();
+    });
+  }
+
+  if (btnConfirmSnapshot) {
+    btnConfirmSnapshot.addEventListener('click', function() {
+      var name = snapshotNameInput.value.trim();
+      if (viewer.saveSnapshot(name)) {
+        saveSnapshotDialog.classList.add('hidden');
+        updateCompareDropdown();
+      } else {
+        alert('保存快照失败');
+      }
+    });
+  }
+
+  if (btnCancelSnapshot) {
+    btnCancelSnapshot.addEventListener('click', function() {
+      saveSnapshotDialog.classList.add('hidden');
+    });
+  }
+
+  if (snapshotNameInput) {
+    snapshotNameInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        btnConfirmSnapshot.click();
+      } else if (e.key === 'Escape') {
+        saveSnapshotDialog.classList.add('hidden');
+      }
+    });
+  }
+
+  if (btnCompare) {
+    btnCompare.addEventListener('click', function(e) {
+      e.stopPropagation();
+      updateCompareDropdown();
+      compareDropdownMenu.classList.toggle('hidden');
+    });
+  }
+
+  document.addEventListener('click', function(e) {
+    if (compareDropdownMenu && !compareDropdownMenu.classList.contains('hidden')) {
+      if (!compareDropdownMenu.contains(e.target) && e.target !== btnCompare) {
+        compareDropdownMenu.classList.add('hidden');
+      }
+    }
+  });
+
+  if (btnExitCompare) {
+    btnExitCompare.addEventListener('click', function() {
+      viewer.exitCompareMode();
+      compareDropdownMenu.classList.add('hidden');
+      updateCompareDropdown();
+    });
+  }
+
+  if (diffSummaryClose) {
+    diffSummaryClose.addEventListener('click', function() {
+      document.getElementById('diff-summary-panel').classList.add('hidden');
+    });
+  }
+
+  function updateCompareDropdown() {
+    if (!compareSnapshotList) return;
+
+    var snapshots = viewer.snapshots || [];
+    var html = '';
+
+    if (snapshots.length === 0) {
+      html = '<div class="dropdown-item" style="color:var(--text-muted);cursor:default;">No snapshots saved</div>';
+    } else {
+      for (var i = 0; i < snapshots.length; i++) {
+        var snap = snapshots[i];
+        var timeStr = new Date(snap.createdAt).toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+        html +=
+          '<div class="snapshot-item" data-snapshot-id="' + snap.id + '">' +
+          '<span class="snapshot-item-name">' + snap.name + '</span>' +
+          '<span class="snapshot-item-time">' + timeStr + '</span>' +
+          '<button class="snapshot-item-delete" data-snapshot-id="' + snap.id + '" title="Delete">✕</button>' +
+          '</div>';
+      }
+    }
+
+    compareSnapshotList.innerHTML = html;
+
+    compareSnapshotList.querySelectorAll('.snapshot-item').forEach(function(item) {
+      item.addEventListener('click', function(e) {
+        if (e.target.classList.contains('snapshot-item-delete')) {
+          e.stopPropagation();
+          var snapId = e.target.dataset.snapshotId;
+          viewer.deleteSnapshot(snapId);
+          updateCompareDropdown();
+        } else {
+          var snapId = this.dataset.snapshotId;
+          if (viewer.enterCompareMode(snapId)) {
+            compareDropdownMenu.classList.add('hidden');
+            updateCompareDropdown();
+          }
+        }
+      });
+    });
+
+    if (btnExitCompare) {
+      if (viewer.compareMode) {
+        btnExitCompare.classList.remove('hidden');
+      } else {
+        btnExitCompare.classList.add('hidden');
+      }
+    }
+  }
+
+  updateCompareDropdown();
+
 })();
