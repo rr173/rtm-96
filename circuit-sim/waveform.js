@@ -2845,7 +2845,7 @@ var WaveformViewer = (function() {
   Viewer.prototype.updateSnapshotCount = function() {
     var countEl = document.getElementById('snapshot-count');
     if (countEl) {
-      countEl.textContent = this.snapshots.length + '/' + this.maxSnapshots;
+      countEl.textContent = 'Snapshots: ' + this.snapshots.length + '/' + this.maxSnapshots;
     }
   };
 
