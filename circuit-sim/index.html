@@ -87,6 +87,7 @@
         <div id="signal-list">
           <div id="signal-list-header">
             <input type="text" id="signal-filter" placeholder="🔍 搜索信号..." spellcheck="false">
+            <button id="btn-add-watch" class="btn btn-small">+ Add Watch</button>
             <button id="btn-new-group" class="btn btn-small">+ New Group</button>
           </div>
           <div id="signal-list-inner"></div>
@@ -321,11 +322,65 @@
       <button id="btn-confirm-snapshot" class="btn btn-primary">Save</button>
     </div>
   </div>
+
+  <div id="add-watch-dialog" class="dialog hidden">
+    <div class="dialog-header">
+      <span>👁️ Add Watch Expression</span>
+      <button class="dialog-close" data-dialog="add-watch-dialog">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-row">
+        <label>Watch Name:</label>
+        <input type="text" id="watch-name-input" placeholder="e.g., carry_check">
+      </div>
+      <div class="form-row">
+        <label>Expression:</label>
+        <input type="text" id="watch-expr-input" placeholder="e.g., q0 & q1 | ~q2 or count[3:0] > 5">
+      </div>
+      <div class="watch-hint">
+        <p>Supported operators:</p>
+        <ul>
+          <li>Bitwise: &amp; | ^ ~</li>
+          <li>Comparison: &gt; &lt; == != &gt;= &lt;=</li>
+          <li>Arithmetic: + - *</li>
+          <li>Bit select: signal[bit] or signal[high:low]</li>
+          <li>Concatenation: {sig1, sig2, sig3}</li>
+          <li>Constants: 42, 4'hA, 8'b10101010</li>
+        </ul>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-cancel-watch" class="btn">Cancel</button>
+      <button id="btn-confirm-watch" class="btn btn-primary">Add Watch</button>
+    </div>
+  </div>
+
+  <div id="edit-watch-dialog" class="dialog hidden">
+    <div class="dialog-header">
+      <span>✏️ Edit Watch Expression</span>
+      <button class="dialog-close" data-dialog="edit-watch-dialog">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-row">
+        <label>Watch Name:</label>
+        <input type="text" id="edit-watch-name-input">
+      </div>
+      <div class="form-row">
+        <label>Expression:</label>
+        <input type="text" id="edit-watch-expr-input">
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-cancel-edit-watch" class="btn">Cancel</button>
+      <button id="btn-confirm-edit-watch" class="btn btn-primary">Update</button>
+    </div>
+  </div>
 </div>
 <script src="parser.js"></script>
 <script src="simulator.js"></script>
 <script src="coverage.js"></script>
 <script src="waveform.js"></script>
+<script src="expression.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

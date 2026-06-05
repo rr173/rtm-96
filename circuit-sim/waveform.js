@@ -98,6 +98,10 @@ var WaveformViewer = (function() {
     this.decoders = {};
     this.busWaveforms = {};
 
+    this.watchProbes = [];
+    this.maxWatchProbes = 8;
+    this.watchWaveforms = {};
+
     this.pixelsPerNs = 4;
     this.scrollX = 0;
     this.scrollY = 0;
@@ -181,6 +185,7 @@ var WaveformViewer = (function() {
     }
 
     this.rebuildAllBuses();
+    this.rebuildAllWatchProbes();
     this.buildSignalLabels();
     this.resize();
     this.draw();
@@ -211,6 +216,7 @@ var WaveformViewer = (function() {
     this.ungroupedSignals = [];
     this.collapsedGroups = {};
     this.filterText = '';
+    this.watchWaveforms = {};
     this.signalListEl.innerHTML = '';
     this.resize();
     this.draw();
@@ -346,6 +352,13 @@ var WaveformViewer = (function() {
       }
     }
 
+    for (var wi = 0; wi < this.watchProbes.length; wi++) {
+      var probe = this.watchProbes[wi];
+      if (this.matchesFilter(probe.name)) {
+        names.push({ name: probe.name, type: 'watch', probeId: probe.id });
+      }
+    }
+
     return names;
   };
 
@@ -361,6 +374,13 @@ var WaveformViewer = (function() {
         height += DECODER_HEIGHT;
       }
       return height;
+    }
+    if (item.type === 'watch') {
+      var probe = this.watchProbes.find(function(p) { return p.id === item.probeId; });
+      if (probe && probe.width > 1) {
+        return BUS_HEIGHT;
+      }
+      return SIGNAL_HEIGHT;
     }
     return SIGNAL_HEIGHT;
   };
@@ -691,6 +711,16 @@ var WaveformViewer = (function() {
       });
 
       innerEl.appendChild(busLabel);
+    }
+
+    for (var wi = 0; wi < this.watchProbes.length; wi++) {
+      var probe = this.watchProbes[wi];
+      if (!this.matchesFilter(probe.name)) continue;
+
+      var watchLabel = this.createWatchLabel(probe);
+      var watchHeight = probe.width > 1 ? BUS_HEIGHT : SIGNAL_HEIGHT;
+      watchLabel.style.height = watchHeight + 'px';
+      innerEl.appendChild(watchLabel);
     }
 
     this.setupDragAndDrop();
@@ -1471,6 +1501,16 @@ var WaveformViewer = (function() {
           } else {
             this.drawBusWaveform(ctx, item.name, y, w);
           }
+        } else if (item.type === 'watch') {
+          var probe = this.watchProbes.find(function(p) { return p.id === item.probeId; });
+          if (probe) {
+            this.drawWatchBackground(ctx, y, itemH, w, probe.hasError);
+            if (probe.width > 1) {
+              this.drawWatchBusWaveform(ctx, probe, y, w);
+            } else {
+              this.drawWatchSignalWaveform(ctx, probe, y, w);
+            }
+          }
         } else {
           if (this.compareMode && this.compareSnapshot) {
             this.drawSnapshotWaveform(ctx, item.name, y, w);
@@ -1921,6 +1961,7 @@ var WaveformViewer = (function() {
       '<span class="tt-signal">' + this.hoveredSignal + '</span> ';
 
     var bus = this.buses.find(function(b) { return b.name === this.hoveredSignal; }.bind(this));
+    var watchProbe = this.watchProbes.find(function(p) { return p.name === this.hoveredSignal; }.bind(this));
 
     if (bus) {
       var busValue = this.getBusValueAtTime(bus.name, time);
@@ -1930,6 +1971,16 @@ var WaveformViewer = (function() {
         var bitVal = this.getValueAtTime(bus.bits[bi], time);
         html += '<span class="tt-bit">' + bus.bits[bi] + '=' + bitVal + '</span>';
       }
+      html += '</div>';
+    } else if (watchProbe) {
+      var watchValue = this.getValueAtTimeForWatch(watchProbe.id, time);
+      if (watchProbe.width > 1) {
+        html += '<span class="tt-value">= ' + watchProbe.width + "'h" + watchValue.toString(16).toUpperCase() + '</span>';
+      } else {
+        html += '<span class="tt-value">= ' + watchValue + '</span>';
+      }
+      html += '<div class="tt-bits">';
+      html += '<span class="tt-bit">expr: ' + watchProbe.expression + '</span>';
       html += '</div>';
     } else {
       var value = this.getValueAtTime(this.hoveredSignal, time);
@@ -3322,6 +3373,408 @@ var WaveformViewer = (function() {
     this.highlightedSignal = signalName;
     this.buildSignalLabels();
     this.draw();
+  };
+
+  Viewer.prototype.collectAllTimes = function() {
+    var allTimes = [];
+    for (var sigName in this.waveforms) {
+      if (this.waveforms.hasOwnProperty(sigName)) {
+        var wf = this.waveforms[sigName];
+        for (var wi = 0; wi < wf.length; wi++) {
+          allTimes.push(wf[wi].time);
+        }
+      }
+    }
+    allTimes = allTimes.sort(function(a, b) { return a - b; });
+    allTimes = allTimes.filter(function(t, i, arr) { return i === 0 || t !== arr[i - 1]; });
+    return allTimes;
+  };
+
+  Viewer.prototype.getSignalWidth = function(signalName) {
+    var sig = this.signalMap[signalName];
+    if (sig && sig.width) return sig.width;
+    return 1;
+  };
+
+  Viewer.prototype.buildWatchWaveform = function(probe) {
+    if (!probe.ast) {
+      probe.hasError = true;
+      probe.errorMsg = probe.parseError || 'Parse error';
+      probe.width = 1;
+      this.watchWaveforms[probe.id] = [];
+      return;
+    }
+
+    var self = this;
+    var allTimes = this.collectAllTimes();
+    var wf = [];
+    var lastValue = null;
+    var lastWidth = 1;
+    var hasError = false;
+    var errorMsg = null;
+
+    for (var ti = 0; ti < allTimes.length; ti++) {
+      var t = allTimes[ti];
+      var signalValues = {};
+
+      for (var sigName in this.waveforms) {
+        if (this.waveforms.hasOwnProperty(sigName)) {
+          var val = this.getValueAtTime(sigName, t);
+          signalValues[sigName] = {
+            value: val,
+            width: this.getSignalWidth(sigName)
+          };
+        }
+      }
+
+      var result = ExpressionEvaluator.evaluate(probe.ast, signalValues);
+      if (!result.success) {
+        hasError = true;
+        errorMsg = result.error;
+        break;
+      }
+
+      if (wf.length === 0 || result.value !== lastValue) {
+        wf.push({ time: t, value: result.value });
+        lastValue = result.value;
+        lastWidth = result.width;
+      }
+    }
+
+    probe.hasError = hasError;
+    probe.errorMsg = errorMsg;
+    probe.width = lastWidth;
+    this.watchWaveforms[probe.id] = wf;
+  };
+
+  Viewer.prototype.rebuildAllWatchProbes = function() {
+    for (var i = 0; i < this.watchProbes.length; i++) {
+      this.buildWatchWaveform(this.watchProbes[i]);
+    }
+  };
+
+  Viewer.prototype.addWatchProbe = function(name, expression) {
+    if (this.watchProbes.length >= this.maxWatchProbes) {
+      return { success: false, error: 'Maximum ' + this.maxWatchProbes + ' watch probes allowed' };
+    }
+
+    var parseResult = ExpressionEvaluator.parse(expression);
+
+    var probe = {
+      id: 'watch_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: name,
+      expression: expression,
+      ast: parseResult.success ? parseResult.ast : null,
+      parseError: parseResult.success ? null : parseResult.error,
+      width: 1,
+      hasError: !parseResult.success,
+      errorMsg: parseResult.error
+    };
+
+    this.watchProbes.push(probe);
+    this.buildWatchWaveform(probe);
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+
+    return { success: true, probe: probe };
+  };
+
+  Viewer.prototype.updateWatchProbe = function(probeId, name, expression) {
+    var probe = this.watchProbes.find(function(p) { return p.id === probeId; });
+    if (!probe) {
+      return { success: false, error: 'Probe not found' };
+    }
+
+    var parseResult = ExpressionEvaluator.parse(expression);
+
+    probe.name = name;
+    probe.expression = expression;
+    probe.ast = parseResult.success ? parseResult.ast : null;
+    probe.parseError = parseResult.success ? null : parseResult.error;
+
+    this.buildWatchWaveform(probe);
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+
+    return { success: true, probe: probe };
+  };
+
+  Viewer.prototype.deleteWatchProbe = function(probeId) {
+    var idx = this.watchProbes.findIndex(function(p) { return p.id === probeId; });
+    if (idx === -1) return false;
+
+    this.watchProbes.splice(idx, 1);
+    delete this.watchWaveforms[probeId];
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+    return true;
+  };
+
+  Viewer.prototype.drawWatchBackground = function(ctx, baseY, height, canvasW, hasError) {
+    ctx.save();
+    ctx.fillStyle = hasError ? 'rgba(243, 139, 168, 0.15)' : 'rgba(203, 166, 247, 0.08)';
+    ctx.fillRect(0, baseY, canvasW, height);
+    ctx.restore();
+  };
+
+  Viewer.prototype.drawWatchSignalWaveform = function(ctx, probe, baseY, canvasW) {
+    var wf = this.watchWaveforms[probe.id] || [];
+    if (wf.length === 0) {
+      if (probe.hasError) {
+        ctx.save();
+        ctx.strokeStyle = '#f38ba8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        var midY = baseY + SIGNAL_HEIGHT / 2;
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(canvasW, midY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      return;
+    }
+
+    var isHighlighted = this.highlightedSignal === probe.name;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, baseY, canvasW, SIGNAL_HEIGHT);
+    ctx.clip();
+
+    var highY = baseY + HIGH_Y_OFFSET;
+    var lowY = baseY + LOW_Y_OFFSET;
+    var transW = Math.min(TRANSITION_WIDTH, this.pixelsPerNs * 0.8);
+
+    var lineColor = isHighlighted ? COLORS.highlightLine : '#cba6f7';
+    ctx.lineWidth = isHighlighted ? 2.5 : 1.5;
+    ctx.strokeStyle = lineColor;
+
+    ctx.beginPath();
+
+    var startTime = this.scrollX / this.pixelsPerNs;
+    var endTime = (this.scrollX + canvasW) / this.pixelsPerNs;
+
+    var firstDrawn = false;
+    var prevY = lowY;
+
+    for (var wi = 0; wi < wf.length; wi++) {
+      var evt = wf[wi];
+      if (evt.time > endTime + 10) break;
+
+      var x = evt.time * this.pixelsPerNs - this.scrollX;
+      var targetY = evt.value ? highY : lowY;
+
+      if (!firstDrawn) {
+        if (wi === 0) {
+          var initX = Math.max(0, x - 1000);
+          ctx.moveTo(initX, targetY);
+          ctx.lineTo(x, targetY);
+        } else {
+          var prevEvt = wf[wi - 1];
+          var prevEvtY = prevEvt.value ? highY : lowY;
+          var prevEvtX = prevEvt.time * this.pixelsPerNs - this.scrollX;
+          ctx.moveTo(prevEvtX, prevEvtY);
+          ctx.lineTo(x - transW, prevEvtY);
+          ctx.lineTo(x, targetY);
+        }
+        firstDrawn = true;
+      } else {
+        ctx.lineTo(x - transW, prevY);
+        ctx.lineTo(x, targetY);
+      }
+
+      prevY = targetY;
+    }
+
+    if (firstDrawn) {
+      ctx.lineTo(canvasW + 10, prevY);
+    }
+
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  Viewer.prototype.drawWatchBusWaveform = function(ctx, probe, baseY, canvasW) {
+    var wf = this.watchWaveforms[probe.id] || [];
+    if (wf.length === 0) {
+      if (probe.hasError) {
+        ctx.save();
+        ctx.strokeStyle = '#f38ba8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        var midY = baseY + BUS_HEIGHT / 2;
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(canvasW, midY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      return;
+    }
+
+    var isHighlighted = this.highlightedSignal === probe.name;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, baseY, canvasW, BUS_HEIGHT);
+    ctx.clip();
+
+    var topY = baseY + 8;
+    var bottomY = baseY + BUS_HEIGHT - 8;
+    var midY = baseY + BUS_HEIGHT / 2;
+
+    var startTime = this.scrollX / this.pixelsPerNs;
+    var endTime = (this.scrollX + canvasW) / this.pixelsPerNs;
+
+    var fillColor = isHighlighted ? 'rgba(249, 226, 175, 0.3)' : 'rgba(203, 166, 247, 0.25)';
+    var borderColor = isHighlighted ? COLORS.highlightLine : '#cba6f7';
+
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = isHighlighted ? 2.5 : 1.5;
+
+    var firstEvent = wf[0];
+    var lastEvent = wf[wf.length - 1];
+    var firstX = Math.max(-100, firstEvent.time * this.pixelsPerNs - this.scrollX);
+    var lastX = Math.min(canvasW + 100, lastEvent.time * this.pixelsPerNs - this.scrollX);
+
+    ctx.beginPath();
+    ctx.moveTo(firstX, topY);
+    ctx.lineTo(lastX, topY);
+    ctx.lineTo(lastX, bottomY);
+    ctx.lineTo(firstX, bottomY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = borderColor;
+    ctx.fillStyle = borderColor;
+    ctx.lineWidth = 1.5;
+
+    for (var wi = 1; wi < wf.length; wi++) {
+      var evt = wf[wi];
+      if (evt.time < startTime - 10) continue;
+      if (evt.time > endTime + 10) break;
+
+      var x = evt.time * this.pixelsPerNs - this.scrollX;
+      var diamondW = Math.min(DIAMOND_WIDTH, this.pixelsPerNs * 0.6);
+
+      ctx.beginPath();
+      ctx.moveTo(x - diamondW, topY);
+      ctx.lineTo(x, midY - 4);
+      ctx.lineTo(x + diamondW, topY);
+      ctx.moveTo(x - diamondW, bottomY);
+      ctx.lineTo(x, midY + 4);
+      ctx.lineTo(x + diamondW, bottomY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x, midY - 4);
+      ctx.lineTo(x, midY + 4);
+      ctx.stroke();
+    }
+
+    var minCharWidth = 30;
+    if (this.pixelsPerNs >= 1.5) {
+      ctx.fillStyle = COLORS.busText;
+      ctx.font = '12px ' + (window.getComputedStyle(document.body).fontFamily || 'monospace');
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      for (var wi = 0; wi < wf.length; wi++) {
+        var evt = wf[wi];
+        var nextEvt = wf[wi + 1];
+        var evtStart = Math.max(startTime, evt.time);
+        var evtEnd = nextEvt ? Math.min(endTime, nextEvt.time) : endTime;
+
+        var xStart = evtStart * this.pixelsPerNs - this.scrollX;
+        var xEnd = evtEnd * this.pixelsPerNs - this.scrollX;
+        var segmentWidth = xEnd - xStart;
+
+        if (segmentWidth >= minCharWidth) {
+          var xMid = (xStart + xEnd) / 2;
+          var hexStr = probe.width + "'h" + evt.value.toString(16).toUpperCase();
+          ctx.fillText(hexStr, xMid, midY);
+        }
+      }
+    }
+
+    ctx.restore();
+  };
+
+  Viewer.prototype.createWatchLabel = function(probe) {
+    var self = this;
+    var label = document.createElement('div');
+    label.className = 'signal-label watch-label';
+    if (probe.hasError) {
+      label.classList.add('watch-error');
+    }
+    label.dataset.watchId = probe.id;
+    label.dataset.type = 'watch';
+    label.draggable = true;
+
+    var prefixSpan = document.createElement('span');
+    prefixSpan.className = 'watch-prefix';
+    prefixSpan.textContent = 'W:';
+    label.appendChild(prefixSpan);
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'signal-name';
+    nameSpan.textContent = probe.name;
+    label.appendChild(nameSpan);
+
+    var exprSpan = document.createElement('span');
+    exprSpan.className = 'watch-expr';
+    exprSpan.textContent = probe.expression;
+    label.appendChild(exprSpan);
+
+    if (probe.hasError) {
+      var errorIcon = document.createElement('span');
+      errorIcon.className = 'watch-error-icon';
+      errorIcon.textContent = '⚠';
+      errorIcon.title = probe.errorMsg || 'Error';
+      label.appendChild(errorIcon);
+    }
+
+    label.addEventListener('dblclick', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (self.onEditWatch) {
+        self.onEditWatch(probe.id);
+      }
+    });
+
+    label.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (self.onWatchContextMenu) {
+        self.onWatchContextMenu(e.clientX, e.clientY, probe.id);
+      }
+    });
+
+    label.addEventListener('click', function() {
+      self.toggleHighlight(probe.name);
+    });
+
+    return label;
+  };
+
+  Viewer.prototype.getValueAtTimeForWatch = function(probeId, time) {
+    var wf = this.watchWaveforms[probeId] || [];
+    if (wf.length === 0) return 0;
+
+    var value = wf[0].value;
+    for (var i = 1; i < wf.length; i++) {
+      if (wf[i].time > time) break;
+      value = wf[i].value;
+    }
+    return value;
   };
 
   return Viewer;

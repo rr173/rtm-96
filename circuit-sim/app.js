@@ -1951,4 +1951,210 @@
 
   ParamSweepEngine.init();
 
+  var WatchExpressionEngine = (function() {
+
+    var editingWatchId = null;
+
+    function init() {
+      var btnAddWatch = document.getElementById('btn-add-watch');
+      if (btnAddWatch) {
+        btnAddWatch.addEventListener('click', showAddWatchDialog);
+      }
+
+      var btnConfirmWatch = document.getElementById('btn-confirm-watch');
+      if (btnConfirmWatch) {
+        btnConfirmWatch.addEventListener('click', confirmAddWatch);
+      }
+
+      var btnCancelWatch = document.getElementById('btn-cancel-watch');
+      if (btnCancelWatch) {
+        btnCancelWatch.addEventListener('click', hideAddWatchDialog);
+      }
+
+      var btnConfirmEditWatch = document.getElementById('btn-confirm-edit-watch');
+      if (btnConfirmEditWatch) {
+        btnConfirmEditWatch.addEventListener('click', confirmEditWatch);
+      }
+
+      var btnCancelEditWatch = document.getElementById('btn-cancel-edit-watch');
+      if (btnCancelEditWatch) {
+        btnCancelEditWatch.addEventListener('click', hideEditWatchDialog);
+      }
+
+      var dialogCloseBtns = document.querySelectorAll('[data-dialog="add-watch-dialog"]');
+      dialogCloseBtns.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          hideAddWatchDialog();
+        });
+      });
+
+      var editDialogCloseBtns = document.querySelectorAll('[data-dialog="edit-watch-dialog"]');
+      editDialogCloseBtns.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          hideEditWatchDialog();
+        });
+      });
+
+      createContextMenu();
+
+      viewer.onEditWatch = function(probeId) {
+        showEditWatchDialog(probeId);
+      };
+
+      viewer.onWatchContextMenu = function(x, y, probeId) {
+        showWatchContextMenu(x, y, probeId);
+      };
+    }
+
+    function showAddWatchDialog() {
+      var dialog = document.getElementById('add-watch-dialog');
+      if (!dialog) return;
+
+      document.getElementById('watch-name-input').value = '';
+      document.getElementById('watch-expr-input').value = '';
+      dialog.classList.remove('hidden');
+      document.getElementById('watch-name-input').focus();
+    }
+
+    function hideAddWatchDialog() {
+      var dialog = document.getElementById('add-watch-dialog');
+      if (dialog) {
+        dialog.classList.add('hidden');
+      }
+    }
+
+    function confirmAddWatch() {
+      var name = document.getElementById('watch-name-input').value.trim();
+      var expr = document.getElementById('watch-expr-input').value.trim();
+
+      if (!name) {
+        alert('Please enter a watch name');
+        return;
+      }
+      if (!expr) {
+        alert('Please enter an expression');
+        return;
+      }
+
+      var result = viewer.addWatchProbe(name, expr);
+      if (!result.success) {
+        alert('Error: ' + result.error);
+        return;
+      }
+
+      hideAddWatchDialog();
+    }
+
+    function showEditWatchDialog(probeId) {
+      var dialog = document.getElementById('edit-watch-dialog');
+      if (!dialog) return;
+
+      var probe = viewer.watchProbes.find(function(p) { return p.id === probeId; });
+      if (!probe) return;
+
+      editingWatchId = probeId;
+      document.getElementById('edit-watch-name-input').value = probe.name;
+      document.getElementById('edit-watch-expr-input').value = probe.expression;
+      dialog.classList.remove('hidden');
+      document.getElementById('edit-watch-expr-input').focus();
+    }
+
+    function hideEditWatchDialog() {
+      var dialog = document.getElementById('edit-watch-dialog');
+      if (dialog) {
+        dialog.classList.add('hidden');
+      }
+      editingWatchId = null;
+    }
+
+    function confirmEditWatch() {
+      if (!editingWatchId) return;
+
+      var name = document.getElementById('edit-watch-name-input').value.trim();
+      var expr = document.getElementById('edit-watch-expr-input').value.trim();
+
+      if (!name) {
+        alert('Please enter a watch name');
+        return;
+      }
+      if (!expr) {
+        alert('Please enter an expression');
+        return;
+      }
+
+      var result = viewer.updateWatchProbe(editingWatchId, name, expr);
+      if (!result.success) {
+        alert('Error: ' + result.error);
+        return;
+      }
+
+      hideEditWatchDialog();
+    }
+
+    function createContextMenu() {
+      var menu = document.createElement('div');
+      menu.id = 'watch-context-menu';
+      menu.className = 'hidden';
+      menu.innerHTML =
+        '<div class="menu-item" data-action="edit">✏️ Edit Expression</div>' +
+        '<div class="menu-item" data-action="copy">📋 Copy Expression</div>' +
+        '<div class="menu-item menu-danger" data-action="delete">🗑️ Delete Watch</div>';
+      document.body.appendChild(menu);
+
+      menu.querySelectorAll('.menu-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+          var action = this.dataset.action;
+          var probeId = menu.dataset.probeId;
+          handleContextMenuAction(action, probeId);
+          menu.classList.add('hidden');
+        });
+      });
+
+      document.addEventListener('click', function(e) {
+        if (!menu.contains(e.target)) {
+          menu.classList.add('hidden');
+        }
+      });
+    }
+
+    function showWatchContextMenu(x, y, probeId) {
+      var menu = document.getElementById('watch-context-menu');
+      if (!menu) return;
+
+      menu.dataset.probeId = probeId;
+      menu.style.left = x + 'px';
+      menu.style.top = y + 'px';
+      menu.classList.remove('hidden');
+    }
+
+    function handleContextMenuAction(action, probeId) {
+      var probe = viewer.watchProbes.find(function(p) { return p.id === probeId; });
+      if (!probe) return;
+
+      switch (action) {
+        case 'edit':
+          showEditWatchDialog(probeId);
+          break;
+        case 'copy':
+          navigator.clipboard.writeText(probe.expression).then(function() {
+          }).catch(function(err) {
+            console.error('Failed to copy:', err);
+          });
+          break;
+        case 'delete':
+          if (confirm('Delete watch "' + probe.name + '"?')) {
+            viewer.deleteWatchProbe(probeId);
+          }
+          break;
+      }
+    }
+
+    return {
+      init: init
+    };
+
+  })();
+
+  WatchExpressionEngine.init();
+
 })();
