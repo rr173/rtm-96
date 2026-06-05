@@ -995,4 +995,927 @@
 
   updateCompareDropdown();
 
+  var ParamSweepEngine = (function() {
+    var parameters = [];
+    var metrics = [];
+    var combinations = [];
+    var results = [];
+    var currentComboIndex = 0;
+    var isSweeping = false;
+    var sweepWorker = null;
+    var shouldCancel = false;
+    var selectedResultIndex = -1;
+    var sortColumn = null;
+    var sortDirection = 'asc';
+
+    var MAX_PARAMS = 3;
+    var MAX_METRICS = 5;
+    var MAX_COMBINATIONS = 200;
+
+    var paramSweepPanel = document.getElementById('param-sweep-panel');
+    var paramSweepToggle = document.getElementById('param-sweep-toggle');
+    var paramSweepHeader = paramSweepPanel ? paramSweepPanel.querySelector('.param-sweep-header') : null;
+    var paramListEl = document.getElementById('param-list');
+    var metricListEl = document.getElementById('metric-list');
+    var btnAddParam = document.getElementById('btn-add-param');
+    var btnAddMetric = document.getElementById('btn-add-metric');
+    var btnRunSweep = document.getElementById('btn-run-sweep');
+    var btnCancelSweep = document.getElementById('btn-cancel-sweep');
+    var combinationsLabel = document.getElementById('param-sweep-combinations');
+    var sweepProgress = document.getElementById('sweep-progress');
+    var sweepResultsDialog = document.getElementById('sweep-results-dialog');
+    var sweepResultsClose = document.getElementById('sweep-results-close');
+    var tabTable = document.getElementById('tab-table');
+    var tabHeatmap = document.getElementById('tab-heatmap');
+    var tableView = document.getElementById('sweep-table-view');
+    var heatmapView = document.getElementById('sweep-heatmap-view');
+    var sweepTableContainer = document.getElementById('sweep-table-container');
+    var heatmapCanvas = document.getElementById('heatmap-canvas');
+    var heatmapMetricSelect = document.getElementById('heatmap-metric-select-2');
+
+    function init() {
+      if (!paramSweepPanel) return;
+
+      paramSweepToggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        paramSweepPanel.classList.toggle('collapsed');
+      });
+
+      if (paramSweepHeader) {
+        paramSweepHeader.addEventListener('click', function() {
+          paramSweepPanel.classList.toggle('collapsed');
+        });
+      }
+
+      btnAddParam.addEventListener('click', addParameter);
+      btnAddMetric.addEventListener('click', addMetric);
+      btnRunSweep.addEventListener('click', startSweep);
+      btnCancelSweep.addEventListener('click', cancelSweep);
+
+      sweepResultsClose.addEventListener('click', function() {
+        sweepResultsDialog.classList.add('hidden');
+      });
+
+      tabTable.addEventListener('click', function() {
+        switchTab('table');
+      });
+
+      tabHeatmap.addEventListener('click', function() {
+        switchTab('heatmap');
+      });
+
+      if (heatmapMetricSelect) {
+        heatmapMetricSelect.addEventListener('change', function() {
+          drawHeatmap();
+        });
+      }
+
+      addParameter();
+      addMetric();
+
+      paramSweepPanel.classList.remove('hidden');
+      paramSweepPanel.classList.remove('collapsed');
+    }
+
+    function getInitialTargets() {
+      var targets = [
+        { value: 'clock_period', label: 'Clock Period' },
+        { value: 'gate_delay', label: 'Gate Delay' }
+      ];
+
+      var source = editor.value;
+      var initialRegex = /#(\d+)\s+(\w+)\s*=/g;
+      var match;
+      var seen = new Set();
+      while ((match = initialRegex.exec(source)) !== null) {
+        var key = 'initial_' + match[2];
+        if (!seen.has(key)) {
+          seen.add(key);
+          targets.push({
+            value: key,
+            label: 'Initial: ' + match[2] + ' (#' + match[1] + ')'
+          });
+        }
+      }
+
+      return targets;
+    }
+
+    function addParameter() {
+      if (parameters.length >= MAX_PARAMS) {
+        alert('Maximum ' + MAX_PARAMS + ' parameters allowed');
+        return;
+      }
+
+      var id = Date.now();
+      var targets = getInitialTargets();
+      var param = {
+        id: id,
+        name: 'param' + (parameters.length + 1),
+        target: targets[0].value,
+        start: 10,
+        end: 20,
+        step: 5
+      };
+      parameters.push(param);
+      renderParameters();
+      updateCombinations();
+    }
+
+    function removeParameter(id) {
+      parameters = parameters.filter(function(p) { return p.id !== id; });
+      renderParameters();
+      updateCombinations();
+    }
+
+    function renderParameters() {
+      if (!paramListEl) return;
+
+      if (parameters.length === 0) {
+        paramListEl.innerHTML = '<div class="empty-param-list">No parameters. Click "Add" to add one.</div>';
+        return;
+      }
+
+      var targets = getInitialTargets();
+      var html = '';
+      for (var i = 0; i < parameters.length; i++) {
+        var p = parameters[i];
+        html += '<div class="param-row" data-id="' + p.id + '">' +
+          '<div class="param-row-header">' +
+          '<input type="text" class="param-name" value="' + p.name + '" placeholder="Name">' +
+          '<button class="param-delete" data-id="' + p.id + '">✕</button>' +
+          '</div>' +
+          '<div class="param-row-fields">' +
+          '<select class="param-target">';
+        for (var t = 0; t < targets.length; t++) {
+          html += '<option value="' + targets[t].value + '"' + (p.target === targets[t].value ? ' selected' : '') + '>' + targets[t].label + '</option>';
+        }
+        html += '</select>' +
+          '<input type="number" class="param-start" value="' + p.start + '" placeholder="Start" min="1">' +
+          '<input type="number" class="param-end" value="' + p.end + '" placeholder="End" min="1">' +
+          '<input type="number" class="param-step" value="' + p.step + '" placeholder="Step" min="1">' +
+          '</div>' +
+          '</div>';
+      }
+      paramListEl.innerHTML = html;
+
+      paramListEl.querySelectorAll('.param-delete').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          removeParameter(parseInt(this.dataset.id, 10));
+        });
+      });
+
+      paramListEl.querySelectorAll('.param-name').forEach(function(input) {
+        input.addEventListener('input', function() {
+          var row = this.closest('.param-row');
+          var id = parseInt(row.dataset.id, 10);
+          var p = parameters.find(function(x) { return x.id === id; });
+          if (p) p.name = this.value;
+        });
+      });
+
+      paramListEl.querySelectorAll('.param-target').forEach(function(select) {
+        select.addEventListener('change', function() {
+          var row = this.closest('.param-row');
+          var id = parseInt(row.dataset.id, 10);
+          var p = parameters.find(function(x) { return x.id === id; });
+          if (p) p.target = this.value;
+          updateCombinations();
+        });
+      });
+
+      paramListEl.querySelectorAll('.param-start, .param-end, .param-step').forEach(function(input) {
+        input.addEventListener('input', function() {
+          var row = this.closest('.param-row');
+          var id = parseInt(row.dataset.id, 10);
+          var p = parameters.find(function(x) { return x.id === id; });
+          if (p) {
+            if (this.classList.contains('param-start')) p.start = parseFloat(this.value) || 0;
+            if (this.classList.contains('param-end')) p.end = parseFloat(this.value) || 0;
+            if (this.classList.contains('param-step')) p.step = parseFloat(this.value) || 1;
+          }
+          updateCombinations();
+        });
+      });
+    }
+
+    function addMetric() {
+      if (metrics.length >= MAX_METRICS) {
+        alert('Maximum ' + MAX_METRICS + ' metrics allowed');
+        return;
+      }
+
+      var id = Date.now();
+      var metric = {
+        id: id,
+        name: 'metric' + (metrics.length + 1),
+        type: 'toggle_count',
+        targetSignal: 'q0'
+      };
+      metrics.push(metric);
+      renderMetrics();
+    }
+
+    function removeMetric(id) {
+      metrics = metrics.filter(function(m) { return m.id !== id; });
+      renderMetrics();
+    }
+
+    function getSignalNames() {
+      var names = [];
+      if (viewer && viewer.signalNames) {
+        names = viewer.signalNames.slice();
+      }
+      if (names.length === 0) {
+        names = ['clk', 'rst', 'en', 'q0', 'q1', 'q2', 'valid'];
+      }
+      return names;
+    }
+
+    function renderMetrics() {
+      if (!metricListEl) return;
+
+      if (metrics.length === 0) {
+        metricListEl.innerHTML = '<div class="empty-metric-list">No metrics. Click "Add" to add one.</div>';
+        return;
+      }
+
+      var signalNames = getSignalNames();
+      var metricTypes = [
+        { value: 'toggle_count', label: 'Toggle Count', needsSignal: true },
+        { value: 'assertion_violations', label: 'Assertion Violations', needsSignal: false },
+        { value: 'toggle_coverage', label: 'Toggle Coverage', needsSignal: false },
+        { value: 'branch_coverage', label: 'Branch Coverage', needsSignal: false }
+      ];
+
+      var html = '';
+      for (var i = 0; i < metrics.length; i++) {
+        var m = metrics[i];
+        html += '<div class="metric-row" data-id="' + m.id + '">' +
+          '<div class="metric-row-header">' +
+          '<input type="text" class="metric-name" value="' + m.name + '" placeholder="Name">' +
+          '<button class="metric-delete" data-id="' + m.id + '">✕</button>' +
+          '</div>' +
+          '<div class="metric-row-fields">' +
+          '<select class="metric-type">';
+        for (var t = 0; t < metricTypes.length; t++) {
+          html += '<option value="' + metricTypes[t].value + '"' + (m.type === metricTypes[t].value ? ' selected' : '') + '>' + metricTypes[t].label + '</option>';
+        }
+        html += '</select>' +
+          '<input type="text" class="metric-signal" value="' + (m.targetSignal || '') + '" placeholder="Signal Name" ' +
+          (m.type === 'toggle_count' ? '' : 'style="display:none;"') + '>' +
+          '</div>' +
+          '</div>';
+      }
+      metricListEl.innerHTML = html;
+
+      metricListEl.querySelectorAll('.metric-delete').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          removeMetric(parseInt(this.dataset.id, 10));
+        });
+      });
+
+      metricListEl.querySelectorAll('.metric-name').forEach(function(input) {
+        input.addEventListener('input', function() {
+          var row = this.closest('.metric-row');
+          var id = parseInt(row.dataset.id, 10);
+          var m = metrics.find(function(x) { return x.id === id; });
+          if (m) m.name = this.value;
+        });
+      });
+
+      metricListEl.querySelectorAll('.metric-type').forEach(function(select) {
+        select.addEventListener('change', function() {
+          var row = this.closest('.metric-row');
+          var id = parseInt(row.dataset.id, 10);
+          var m = metrics.find(function(x) { return x.id === id; });
+          if (m) {
+            m.type = this.value;
+            var signalInput = row.querySelector('.metric-signal');
+            if (m.type === 'toggle_count') {
+              signalInput.style.display = '';
+            } else {
+              signalInput.style.display = 'none';
+            }
+          }
+        });
+      });
+
+      metricListEl.querySelectorAll('.metric-signal').forEach(function(input) {
+        input.addEventListener('input', function() {
+          var row = this.closest('.metric-row');
+          var id = parseInt(row.dataset.id, 10);
+          var m = metrics.find(function(x) { return x.id === id; });
+          if (m) m.targetSignal = this.value;
+        });
+      });
+    }
+
+    function updateCombinations() {
+      combinations = generateCombinations();
+      if (combinationsLabel) {
+        var text = 'Total: ' + combinations.length + ' combinations';
+        combinationsLabel.textContent = text;
+        if (combinations.length > MAX_COMBINATIONS) {
+          combinationsLabel.classList.add('warning');
+        } else {
+          combinationsLabel.classList.remove('warning');
+        }
+      }
+    }
+
+    function generateCombinations() {
+      var paramValues = [];
+      for (var i = 0; i < parameters.length; i++) {
+        var p = parameters[i];
+        var values = [];
+        var start = Math.min(p.start, p.end);
+        var end = Math.max(p.start, p.end);
+        var step = Math.max(0.1, Math.abs(p.step));
+        for (var v = start; v <= end + step / 100; v += step) {
+          values.push(Math.round(v * 100) / 100);
+        }
+        paramValues.push({ param: p, values: values });
+      }
+
+      function cartesianProduct(arrays, index, current, result) {
+        if (index === arrays.length) {
+          result.push(current.slice());
+          return;
+        }
+        for (var i = 0; i < arrays[index].values.length; i++) {
+          current.push({ param: arrays[index].param, value: arrays[index].values[i] });
+          cartesianProduct(arrays, index + 1, current, result);
+          current.pop();
+        }
+      }
+
+      var result = [];
+      if (paramValues.length > 0) {
+        cartesianProduct(paramValues, 0, [], result);
+      }
+      return result;
+    }
+
+    function applyParametersToSource(source, combo) {
+      var modifiedSource = source;
+      for (var i = 0; i < combo.length; i++) {
+        var pv = combo[i];
+        var target = pv.param.target;
+        var value = pv.value;
+
+        if (target === 'clock_period') {
+          modifiedSource = modifiedSource.replace(
+            /clock\s+(\w+)\s+period=\s*\d+/g,
+            'clock $1 period=' + value
+          );
+        } else if (target === 'gate_delay') {
+        } else if (target.indexOf('initial_') === 0) {
+          var signalName = target.substring('initial_'.length);
+          var regex = new RegExp('#\\d+\\s+' + signalName + '\\s*=', 'g');
+          modifiedSource = modifiedSource.replace(regex, '#' + value + ' ' + signalName + '=');
+        }
+      }
+      return modifiedSource;
+    }
+
+    function getClockPeriodFromCombo(combo) {
+      for (var i = 0; i < combo.length; i++) {
+        if (combo[i].param.target === 'clock_period') {
+          return combo[i].value;
+        }
+      }
+      return parseInt(clockPeriodInput.value, 10) || 10;
+    }
+
+    function getGateDelayFromCombo(combo) {
+      for (var i = 0; i < combo.length; i++) {
+        if (combo[i].param.target === 'gate_delay') {
+          return combo[i].value;
+        }
+      }
+      return parseInt(gateDelayInput.value, 10) || 1;
+    }
+
+    function startSweep() {
+      if (isSweeping) return;
+      if (parameters.length === 0) {
+        alert('Please add at least one parameter');
+        return;
+      }
+      if (metrics.length === 0) {
+        alert('Please add at least one metric');
+        return;
+      }
+      if (combinations.length === 0) {
+        alert('No parameter combinations to run');
+        return;
+      }
+      if (combinations.length > MAX_COMBINATIONS) {
+        alert('Too many combinations. Maximum is ' + MAX_COMBINATIONS);
+        return;
+      }
+
+      results = [];
+      currentComboIndex = 0;
+      isSweeping = true;
+      shouldCancel = false;
+      selectedResultIndex = -1;
+
+      btnRunSweep.disabled = true;
+      btnCancelSweep.disabled = false;
+      sweepProgress.classList.add('running');
+
+      runNextCombination();
+    }
+
+    function runNextCombination() {
+      if (shouldCancel || currentComboIndex >= combinations.length) {
+        finishSweep();
+        return;
+      }
+
+      var combo = combinations[currentComboIndex];
+      sweepProgress.textContent = (currentComboIndex + 1) + '/' + combinations.length;
+
+      var source = editor.value;
+      var modifiedSource = applyParametersToSource(source, combo);
+      var clockPeriod = getClockPeriodFromCombo(combo);
+      var gateDelay = getGateDelayFromCombo(combo);
+      var simDuration = parseInt(simDurationInput.value, 10) || 200;
+
+      try {
+        sweepWorker = new Worker('worker.js');
+      } catch (e) {
+        runCombinationFallback(modifiedSource, clockPeriod, simDuration, gateDelay, combo);
+        return;
+      }
+
+      sweepWorker.onmessage = function(e) {
+        var msg = e.data;
+        handleSweepResult(msg, combo);
+      };
+
+      sweepWorker.onerror = function(e) {
+        console.error('Sweep worker error:', e);
+        results.push({
+          combo: combo,
+          error: true,
+          metrics: {}
+        });
+        currentComboIndex++;
+        setTimeout(runNextCombination, 10);
+      };
+
+      sweepWorker.postMessage({
+        type: 'simulate',
+        source: modifiedSource,
+        clockPeriod: clockPeriod,
+        simDuration: simDuration,
+        gateDelay: gateDelay
+      });
+    }
+
+    function runCombinationFallback(source, clockPeriod, simDuration, gateDelay, combo) {
+      try {
+        var parseResult = CircuitParser.parse(source);
+        if (parseResult.errors && parseResult.errors.length > 0) {
+          results.push({ combo: combo, error: true, metrics: {} });
+        } else {
+          var netlist = parseResult.data;
+          var result = Simulator.simulate(netlist, clockPeriod, simDuration, gateDelay);
+          handleSweepResult(result, combo);
+        }
+      } catch (e) {
+        console.error('Sweep fallback error:', e);
+        results.push({ combo: combo, error: true, metrics: {} });
+        currentComboIndex++;
+        setTimeout(runNextCombination, 10);
+      }
+    }
+
+    function handleSweepResult(msg, combo) {
+      if (sweepWorker) {
+        sweepWorker.terminate();
+        sweepWorker = null;
+      }
+
+      var metricValues = {};
+      if (msg.type === 'result' || msg.signalNames) {
+        for (var i = 0; i < metrics.length; i++) {
+          var m = metrics[i];
+          metricValues[m.name] = extractMetric(msg, m);
+        }
+      }
+
+      results.push({
+        combo: combo,
+        error: msg.type === 'parseError' || msg.type === 'error',
+        metrics: metricValues,
+        fullResult: msg
+      });
+
+      currentComboIndex++;
+      setTimeout(runNextCombination, 10);
+    }
+
+    function extractMetric(result, metric) {
+      if (!result) return 0;
+
+      switch (metric.type) {
+        case 'toggle_count':
+          return getToggleCount(result, metric.targetSignal);
+        case 'assertion_violations':
+          return getAssertionViolations(result);
+        case 'toggle_coverage':
+          return getToggleCoverage(result);
+        case 'branch_coverage':
+          return getBranchCoverage(result);
+        default:
+          return 0;
+      }
+    }
+
+    function getToggleCount(result, signalName) {
+      if (!result.waveforms || !result.signalMap) return 0;
+      var sigIdx = result.signalMap[signalName];
+      if (sigIdx === undefined) return 0;
+      var waveform = result.waveforms[sigIdx];
+      if (!waveform || waveform.length < 2) return 0;
+
+      var count = 0;
+      for (var i = 1; i < waveform.length; i++) {
+        if (waveform[i].value !== waveform[i - 1].value) {
+          count++;
+        }
+      }
+      return Math.floor(count / 2);
+    }
+
+    function getAssertionViolations(result) {
+      if (!result.assertionStatus) return 0;
+      var total = 0;
+      for (var id in result.assertionStatus) {
+        if (result.assertionStatus.hasOwnProperty(id)) {
+          total += result.assertionStatus[id].violations || 0;
+        }
+      }
+      return total;
+    }
+
+    function getToggleCoverage(result) {
+      if (result.coverageData && result.coverageData.toggleCoverage) {
+        return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.toggleCoverage));
+      }
+      return 0;
+    }
+
+    function getBranchCoverage(result) {
+      if (result.coverageData && result.coverageData.branchCoverage) {
+        return Math.round(CoverageAnalyzer.extractPercentage(result.coverageData.branchCoverage));
+      }
+      return 0;
+    }
+
+    function cancelSweep() {
+      shouldCancel = true;
+      if (sweepWorker) {
+        sweepWorker.terminate();
+        sweepWorker = null;
+      }
+    }
+
+    function finishSweep() {
+      isSweeping = false;
+      btnRunSweep.disabled = false;
+      btnCancelSweep.disabled = true;
+      sweepProgress.classList.remove('running');
+      sweepProgress.textContent = 'Done (' + results.length + '/' + combinations.length + ')';
+
+      if (results.length > 0) {
+        showResultsDialog();
+      }
+    }
+
+    function showResultsDialog() {
+      if (!sweepResultsDialog) return;
+
+      if (parameters.length === 2) {
+        tabHeatmap.style.display = '';
+      } else {
+        tabHeatmap.style.display = 'none';
+      }
+
+      updateMetricSelects();
+      renderTable();
+      switchTab('table');
+
+      sweepResultsDialog.classList.remove('hidden');
+    }
+
+    function updateMetricSelects() {
+      var selects = [
+        document.getElementById('heatmap-metric-select'),
+        document.getElementById('heatmap-metric-select-2')
+      ];
+
+      for (var s = 0; s < selects.length; s++) {
+        var select = selects[s];
+        if (!select) continue;
+        select.innerHTML = '';
+        for (var i = 0; i < metrics.length; i++) {
+          var option = document.createElement('option');
+          option.value = metrics[i].name;
+          option.textContent = metrics[i].name;
+          select.appendChild(option);
+        }
+      }
+    }
+
+    function switchTab(tab) {
+      tabTable.classList.toggle('active', tab === 'table');
+      tabHeatmap.classList.toggle('active', tab === 'heatmap');
+      tableView.classList.toggle('hidden', tab !== 'table');
+      heatmapView.classList.toggle('hidden', tab !== 'heatmap');
+
+      if (tab === 'heatmap') {
+        setTimeout(drawHeatmap, 50);
+      }
+    }
+
+    function renderTable() {
+      if (!sweepTableContainer) return;
+
+      var sortedResults = results.slice();
+      if (sortColumn !== null) {
+        sortedResults.sort(function(a, b) {
+          var valA = getSortValue(a, sortColumn);
+          var valB = getSortValue(b, sortColumn);
+          if (sortDirection === 'asc') {
+            return valA > valB ? 1 : valA < valB ? -1 : 0;
+          } else {
+            return valA < valB ? 1 : valA > valB ? -1 : 0;
+          }
+        });
+      }
+
+      var html = '<table class="sweep-table"><thead><tr>';
+      html += '<th>#</th>';
+      for (var i = 0; i < parameters.length; i++) {
+        html += '<th class="sortable" data-col="param_' + i + '">' + parameters[i].name + '</th>';
+      }
+      for (var j = 0; j < metrics.length; j++) {
+        html += '<th class="sortable" data-col="metric_' + j + '">' + metrics[j].name + '</th>';
+      }
+      html += '</tr></thead><tbody>';
+
+      for (var r = 0; r < sortedResults.length; r++) {
+        var res = sortedResults[r];
+        html += '<tr class="result-row" data-idx="' + r + '">';
+        html += '<td>' + (r + 1) + '</td>';
+        for (var p = 0; p < parameters.length; p++) {
+          var val = '';
+          for (var c = 0; c < res.combo.length; c++) {
+            if (res.combo[c].param.id === parameters[p].id) {
+              val = res.combo[c].value;
+              break;
+            }
+          }
+          html += '<td class="param-value">' + val + '</td>';
+        }
+        for (var m = 0; m < metrics.length; m++) {
+          var mval = res.metrics[metrics[m].name];
+          html += '<td class="metric-value">' + (res.error ? 'Error' : (mval !== undefined ? mval : '-')) + '</td>';
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      sweepTableContainer.innerHTML = html;
+
+      sweepTableContainer.querySelectorAll('th.sortable').forEach(function(th) {
+        th.addEventListener('click', function() {
+          var col = this.dataset.col;
+          if (sortColumn === col) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortColumn = col;
+            sortDirection = 'asc';
+          }
+          renderTable();
+        });
+        if (this.dataset.col === sortColumn) {
+          this.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        }
+      });
+
+      sweepTableContainer.querySelectorAll('.result-row').forEach(function(row) {
+        row.addEventListener('click', function() {
+          var idx = parseInt(this.dataset.idx, 10);
+          loadResultWaveform(idx, sortedResults);
+        });
+      });
+    }
+
+    function getSortValue(result, col) {
+      if (col.indexOf('param_') === 0) {
+        var pIdx = parseInt(col.substring('param_'.length), 10);
+        for (var c = 0; c < result.combo.length; c++) {
+          if (result.combo[c].param.id === parameters[pIdx].id) {
+            return result.combo[c].value;
+          }
+        }
+        return 0;
+      } else if (col.indexOf('metric_') === 0) {
+        var mIdx = parseInt(col.substring('metric_'.length), 10);
+        return result.metrics[metrics[mIdx].name] || 0;
+      }
+      return 0;
+    }
+
+    function drawHeatmap() {
+      if (!heatmapCanvas || parameters.length !== 2 || metrics.length === 0) return;
+
+      var ctx = heatmapCanvas.getContext('2d');
+      var metricName = heatmapMetricSelect ? heatmapMetricSelect.value : metrics[0].name;
+
+      var paramX = parameters[0];
+      var paramY = parameters[1];
+
+      var xValues = [];
+      var yValues = [];
+      var startX = Math.min(paramX.start, paramX.end);
+      var endX = Math.max(paramX.start, paramX.end);
+      var stepX = Math.max(0.1, Math.abs(paramX.step));
+      for (var vx = startX; vx <= endX + stepX / 100; vx += stepX) {
+        xValues.push(Math.round(vx * 100) / 100);
+      }
+
+      var startY = Math.min(paramY.start, paramY.end);
+      var endY = Math.max(paramY.start, paramY.end);
+      var stepY = Math.max(0.1, Math.abs(paramY.step));
+      for (var vy = startY; vy <= endY + stepY / 100; vy += stepY) {
+        yValues.push(Math.round(vy * 100) / 100);
+      }
+
+      var cellSize = 60;
+      var labelHeight = 40;
+      var labelWidth = 60;
+      var padding = 20;
+
+      var width = labelWidth + xValues.length * cellSize + padding;
+      var height = labelHeight + yValues.length * cellSize + padding;
+
+      heatmapCanvas.width = width;
+      heatmapCanvas.height = height;
+
+      ctx.fillStyle = '#1e1e2e';
+      ctx.fillRect(0, 0, width, height);
+
+      var valueMap = {};
+      var minVal = Infinity;
+      var maxVal = -Infinity;
+
+      for (var r = 0; r < results.length; r++) {
+        var res = results[r];
+        if (res.error) continue;
+
+        var xVal = null, yVal = null;
+        for (var c = 0; c < res.combo.length; c++) {
+          if (res.combo[c].param.id === paramX.id) xVal = res.combo[c].value;
+          if (res.combo[c].param.id === paramY.id) yVal = res.combo[c].value;
+        }
+        if (xVal === null || yVal === null) continue;
+
+        var val = res.metrics[metricName] || 0;
+        valueMap[xVal + '_' + yVal] = val;
+        minVal = Math.min(minVal, val);
+        maxVal = Math.max(maxVal, val);
+      }
+
+      if (minVal === Infinity) minVal = 0;
+      if (maxVal === -Infinity) maxVal = 1;
+      if (minVal === maxVal) maxVal = minVal + 1;
+
+      ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#a6adc8';
+
+      for (var i = 0; i < xValues.length; i++) {
+        var x = labelWidth + i * cellSize + cellSize / 2;
+        ctx.fillText(xValues[i], x, labelHeight / 2);
+      }
+
+      ctx.textAlign = 'right';
+      for (var j = 0; j < yValues.length; j++) {
+        var y = labelHeight + j * cellSize + cellSize / 2;
+        ctx.fillText(yValues[j], labelWidth - 8, y);
+      }
+
+      for (var i = 0; i < xValues.length; i++) {
+        for (var j = 0; j < yValues.length; j++) {
+          var x = labelWidth + i * cellSize;
+          var y = labelHeight + j * cellSize;
+          var key = xValues[i] + '_' + yValues[j];
+          var val = valueMap[key];
+
+          if (val === undefined) {
+            ctx.fillStyle = '#313244';
+          } else {
+            var ratio = (val - minVal) / (maxVal - minVal);
+            ctx.fillStyle = getHeatmapColor(ratio);
+          }
+
+          ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+
+          if (val !== undefined) {
+            ctx.fillStyle = ratio > 0.5 ? '#1e1e2e' : '#cdd6f4';
+            ctx.textAlign = 'center';
+            ctx.fillText(val, x + cellSize / 2, y + cellSize / 2);
+          }
+        }
+      }
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#89b4fa';
+      ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillText(paramX.name, width / 2, height - 8);
+
+      ctx.save();
+      ctx.translate(12, height / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(paramY.name, 0, 0);
+      ctx.restore();
+
+      heatmapCanvas.onclick = function(e) {
+        var rect = heatmapCanvas.getBoundingClientRect();
+        var clickX = e.clientX - rect.left;
+        var clickY = e.clientY - rect.top;
+
+        var i = Math.floor((clickX - labelWidth) / cellSize);
+        var j = Math.floor((clickY - labelHeight) / cellSize);
+
+        if (i >= 0 && i < xValues.length && j >= 0 && j < yValues.length) {
+          var targetX = xValues[i];
+          var targetY = yValues[j];
+
+          for (var r = 0; r < results.length; r++) {
+            var res = results[r];
+            var xVal = null, yVal = null;
+            for (var c = 0; c < res.combo.length; c++) {
+              if (res.combo[c].param.id === paramX.id) xVal = res.combo[c].value;
+              if (res.combo[c].param.id === paramY.id) yVal = res.combo[c].value;
+            }
+            if (xVal === targetX && yVal === targetY) {
+              loadResultWaveform(r, results);
+              break;
+            }
+          }
+        }
+      };
+    }
+
+    function getHeatmapColor(ratio) {
+      var r = Math.round(243 * ratio + 137 * (1 - ratio));
+      var g = Math.round(139 * ratio + 180 * (1 - ratio));
+      var b = Math.round(168 * ratio + 250 * (1 - ratio));
+      return 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
+
+    function loadResultWaveform(idx, sortedResults) {
+      selectedResultIndex = idx;
+      var result = sortedResults[idx];
+      if (!result || !result.fullResult) return;
+
+      var msg = result.fullResult;
+
+      var rows = document.querySelectorAll('.result-row');
+      rows.forEach(function(row) {
+        row.classList.remove('selected');
+      });
+      var selectedRow = document.querySelector('.result-row[data-idx="' + idx + '"]');
+      if (selectedRow) selectedRow.classList.add('selected');
+
+      if (msg.type === 'result' || msg.signalNames) {
+        viewer.setData(msg);
+        if (msg.coverageData) {
+          showCoverageReport(msg.coverageData);
+          coveragePanel.classList.remove('hidden');
+        }
+        if (msg.assertions && msg.assertions.length > 0) {
+          showAssertionsReport(msg.assertions, msg.assertionStatus, msg.assertionViolations);
+          assertionsPanel.classList.remove('hidden');
+        }
+      }
+
+      sweepResultsDialog.classList.add('hidden');
+    }
+
+    return {
+      init: init
+    };
+  })();
+
+  ParamSweepEngine.init();
+
 })();

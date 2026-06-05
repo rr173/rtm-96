@@ -158,7 +158,67 @@
         <div id="assertions-list" class="assertions-list"></div>
       </div>
     </div>
+    <div id="param-sweep-panel" class="hidden">
+      <div class="panel-header param-sweep-header">
+        <span>Parameter Sweep</span>
+        <button id="param-sweep-toggle" class="coverage-toggle">▼</button>
+      </div>
+      <div id="param-sweep-content">
+        <div class="param-sweep-summary">
+          <span id="param-sweep-combinations">Total: 0 combinations</span>
+        </div>
+
+        <div class="param-section">
+          <div class="param-section-header">
+            <span>Parameters</span>
+            <button id="btn-add-param" class="btn btn-small">+ Add</button>
+          </div>
+          <div id="param-list" class="param-list"></div>
+        </div>
+
+        <div class="param-section">
+          <div class="param-section-header">
+            <span>Metrics</span>
+            <button id="btn-add-metric" class="btn btn-small">+ Add</button>
+          </div>
+          <div id="metric-list" class="metric-list"></div>
+        </div>
+
+        <div class="param-sweep-controls">
+          <button id="btn-run-sweep" class="btn btn-primary">▶ Run Sweep</button>
+          <button id="btn-cancel-sweep" class="btn btn-danger" disabled>■ Cancel</button>
+          <span id="sweep-progress" class="sweep-progress"></span>
+        </div>
+      </div>
+    </div>
   </main>
+
+  <div id="sweep-results-dialog" class="dialog sweep-results-dialog hidden">
+    <div class="dialog-header">
+      <span>Parameter Sweep Results</span>
+      <button id="sweep-results-close" class="dialog-close">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="sweep-results-tabs">
+        <button id="tab-table" class="sweep-tab active" data-tab="table">Table View</button>
+        <button id="tab-heatmap" class="sweep-tab" data-tab="heatmap">Heatmap View</button>
+      </div>
+      <div id="sweep-table-view" class="sweep-tab-content">
+        <div class="heatmap-metric-select hidden">
+          <label>Metric:</label>
+          <select id="heatmap-metric-select"></select>
+        </div>
+        <div id="sweep-table-container" class="sweep-table-container"></div>
+      </div>
+      <div id="sweep-heatmap-view" class="sweep-tab-content hidden">
+        <div class="heatmap-metric-select">
+          <label>Metric:</label>
+          <select id="heatmap-metric-select-2"></select>
+        </div>
+        <canvas id="heatmap-canvas"></canvas>
+      </div>
+    </div>
+  </div>
   <div id="glitch-detail" class="hidden">
     <div class="glitch-detail-header">
       <span>⚠ Race Hazard Detail</span>
