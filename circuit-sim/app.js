@@ -180,6 +180,24 @@
     });
   });
 
+  var signalFilterInput = document.getElementById('signal-filter');
+  var btnNewGroup = document.getElementById('btn-new-group');
+
+  if (signalFilterInput) {
+    signalFilterInput.addEventListener('input', function() {
+      viewer.setFilterText(this.value);
+    });
+  }
+
+  if (btnNewGroup) {
+    btnNewGroup.addEventListener('click', function() {
+      var groupName = prompt('输入组名:');
+      if (groupName && groupName.trim()) {
+        viewer.createNewGroup(groupName.trim());
+      }
+    });
+  }
+
   function runSimulation() {
     if (running) return;
 

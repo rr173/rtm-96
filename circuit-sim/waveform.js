@@ -8,7 +8,7 @@ var WaveformViewer = (function() {
   var LOW_Y_OFFSET = 32;
   var TRANSITION_WIDTH = 3;
   var DIAMOND_WIDTH = 8;
-  var SIGNAL_LABEL_WIDTH = 120;
+  var SIGNAL_LABEL_WIDTH = 200;
   var TIME_AXIS_HEIGHT = 28;
   var GLITCH_OVERLAY_ALPHA = 0.3;
   var MAX_BUS_WIDTH = 16;
@@ -79,6 +79,13 @@ var WaveformViewer = (function() {
     this.assertionViolations = [];
     this.assertionStatus = {};
     this.highlightedAssertion = null;
+
+    this.signalGroups = [];
+    this.ungroupedSignals = [];
+    this.collapsedGroups = {};
+    this.filterText = '';
+    this.filterDebounceTimer = null;
+    this.draggedItem = null;
 
     this.buses = [];
     this.decoders = {};
@@ -156,6 +163,16 @@ var WaveformViewer = (function() {
       }
     }
 
+    this.signalGroups = [];
+    this.collapsedGroups = {};
+    this.filterText = '';
+    this.ungroupedSignals = [];
+    for (var si = 0; si < this.signalNames.length; si++) {
+      if (!this.clockSignals[this.signalNames[si]]) {
+        this.ungroupedSignals.push(this.signalNames[si]);
+      }
+    }
+
     this.rebuildAllBuses();
     this.buildSignalLabels();
     this.resize();
@@ -180,6 +197,10 @@ var WaveformViewer = (function() {
     this.assertionStatus = {};
     this.highlightedAssertion = null;
     this.hoveredAssertionViolation = null;
+    this.signalGroups = [];
+    this.ungroupedSignals = [];
+    this.collapsedGroups = {};
+    this.filterText = '';
     this.signalListEl.innerHTML = '';
     this.resize();
     this.draw();
@@ -262,18 +283,68 @@ var WaveformViewer = (function() {
     }
   };
 
+  Viewer.prototype.matchesFilter = function(name) {
+    if (!this.filterText) return true;
+    return name.toLowerCase().indexOf(this.filterText.toLowerCase()) !== -1;
+  };
+
+  Viewer.prototype.getGroupVisibleSignals = function(group) {
+    var self = this;
+    return group.signals.filter(function(s) { return self.matchesFilter(s); });
+  };
+
   Viewer.prototype.getAllDisplayNames = function() {
     var names = [];
-    for (var i = 0; i < this.signalNames.length; i++) {
-      names.push({ name: this.signalNames[i], type: 'signal' });
+    var self = this;
+
+    for (var ci = 0; ci < this.clocks.length; ci++) {
+      var clockName = this.clocks[ci].name;
+      if (this.matchesFilter(clockName)) {
+        names.push({ name: clockName, type: 'signal' });
+      }
     }
+
+    for (var gi = 0; gi < this.signalGroups.length; gi++) {
+      var group = this.signalGroups[gi];
+      var visibleSignals = this.getGroupVisibleSignals(group);
+      if (this.filterText && visibleSignals.length === 0) continue;
+
+      names.push({ name: group.id, type: 'group-header', groupName: group.name });
+
+      if (!this.collapsedGroups[group.id]) {
+        for (var si = 0; si < group.signals.length; si++) {
+          var sigName = group.signals[si];
+          if (this.matchesFilter(sigName)) {
+            names.push({ name: sigName, type: 'signal', groupId: group.id });
+          }
+        }
+      }
+    }
+
+    var visibleUngrouped = this.ungroupedSignals.filter(function(s) {
+      return self.matchesFilter(s);
+    });
+    if (visibleUngrouped.length > 0) {
+      for (var ui = 0; ui < visibleUngrouped.length; ui++) {
+        names.push({ name: visibleUngrouped[ui], type: 'signal' });
+      }
+    }
+
     for (var j = 0; j < this.buses.length; j++) {
-      names.push({ name: this.buses[j].name, type: 'bus' });
+      if (this.matchesFilter(this.buses[j].name)) {
+        names.push({ name: this.buses[j].name, type: 'bus' });
+      }
     }
+
     return names;
   };
 
+  var GROUP_HEADER_HEIGHT = 32;
+
   Viewer.prototype.getDisplayItemHeight = function(item) {
+    if (item.type === 'group-header') {
+      return GROUP_HEADER_HEIGHT;
+    }
     if (item.type === 'bus') {
       var height = BUS_HEIGHT;
       if (this.decoders[item.name]) {
@@ -322,8 +393,134 @@ var WaveformViewer = (function() {
     return null;
   };
 
+  Viewer.prototype.createSignalLabel = function(name, cdcSignalMap) {
+    var self = this;
+    var sig = this.signalMap[name] || {};
+    var label = document.createElement('div');
+    label.className = 'signal-label';
+    label.dataset.signal = name;
+    label.dataset.type = 'signal';
+    label.draggable = true;
+
+    var covStatus = 'normal';
+    var toggleCount = 0;
+    var toggleStats = (this.coverageData && CoverageAnalyzer.extractStats(this.coverageData.toggleCoverage)) || {};
+    if (toggleStats[name]) {
+      var tc = toggleStats[name];
+      toggleCount = tc.toggleCount || 0;
+      covStatus = tc.status || 'normal';
+      if (tc.status === 'uncovered' || tc.status === 'stuck') {
+        label.classList.add('signal-uncovered');
+      }
+    }
+
+    if (sig.clockDomain && this.domainColorMap[sig.clockDomain]) {
+      label.style.borderLeft = '3px solid ' + this.domainColorMap[sig.clockDomain].line;
+      label.style.background = this.domainColorMap[sig.clockDomain].bg;
+    }
+
+    var nameSpan = document.createElement('span');
+    nameSpan.textContent = name;
+    label.appendChild(nameSpan);
+
+    var toggleSpan = document.createElement('span');
+    toggleSpan.className = 'toggle-count';
+    if (!this.clockSignals[name]) {
+      toggleSpan.textContent = toggleCount + 'T';
+    }
+    label.appendChild(toggleSpan);
+
+    var typeSpan = document.createElement('span');
+    typeSpan.className = 'signal-type';
+    if (this.clockSignals[name]) {
+      typeSpan.className += ' type-clk';
+      typeSpan.textContent = 'CLK';
+      label.draggable = false;
+    } else if (sig.isReg) {
+      typeSpan.className += ' type-reg';
+      typeSpan.textContent = 'REG';
+    } else if (sig.type === 'input') {
+      typeSpan.className += ' type-input';
+      typeSpan.textContent = 'IN';
+    } else {
+      typeSpan.className += ' type-wire';
+      typeSpan.textContent = 'WIRE';
+    }
+    label.appendChild(typeSpan);
+
+    var hasGlitch = false;
+    for (var g = 0; g < this.glitches.length; g++) {
+      if (this.glitches[g].signal === name) { hasGlitch = true; break; }
+    }
+    if (hasGlitch) {
+      var glitchInd = document.createElement('span');
+      glitchInd.className = 'glitch-indicator';
+      glitchInd.textContent = '⚠';
+      label.appendChild(glitchInd);
+    }
+
+    if (cdcSignalMap[name]) {
+      var cdcInd = document.createElement('span');
+      cdcInd.className = 'cdc-indicator';
+      cdcInd.textContent = '⚡';
+      cdcInd.title = '跨时钟域传递 (' + cdcSignalMap[name].length + ')';
+      cdcInd.dataset.signal = name;
+      cdcInd.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var sigName = this.dataset.signal;
+        self.showCDCDetail(sigName, cdcSignalMap[sigName]);
+      });
+      label.appendChild(cdcInd);
+    }
+
+    label.addEventListener('click', function() {
+      var sigName = this.dataset.signal;
+      self.toggleHighlight(sigName);
+    });
+
+    return label;
+  };
+
+  Viewer.prototype.createGroupHeader = function(group) {
+    var self = this;
+    var header = document.createElement('div');
+    header.className = 'group-header';
+    header.dataset.groupId = group.id;
+    header.draggable = true;
+
+    if (this.collapsedGroups[group.id]) {
+      header.classList.add('collapsed');
+    }
+
+    var toggle = document.createElement('span');
+    toggle.className = 'group-toggle';
+    toggle.textContent = '▼';
+    header.appendChild(toggle);
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'group-name';
+    nameSpan.textContent = group.name;
+    header.appendChild(nameSpan);
+
+    header.addEventListener('click', function(e) {
+      if (e.target.classList.contains('group-toggle') || e.target.classList.contains('group-header')) {
+        self.toggleGroup(group.id);
+      }
+    });
+
+    header.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      self.showGroupContextMenu(e.clientX, e.clientY, group.id);
+    });
+
+    return header;
+  };
+
   Viewer.prototype.buildSignalLabels = function() {
-    this.signalListEl.innerHTML = '';
+    var innerEl = document.getElementById('signal-list-inner');
+    if (!innerEl) innerEl = this.signalListEl;
+    innerEl.innerHTML = '';
     var self = this;
 
     var cdcSignalMap = {};
@@ -337,93 +534,64 @@ var WaveformViewer = (function() {
       }
     }
 
-    for (var i = 0; i < this.signalNames.length; i++) {
-      var name = this.signalNames[i];
-      var sig = this.signalMap[name] || {};
-      var label = document.createElement('div');
-      label.className = 'signal-label';
-      label.dataset.signal = name;
+    for (var ci = 0; ci < this.clocks.length; ci++) {
+      var clockName = this.clocks[ci].name;
+      if (this.matchesFilter(clockName)) {
+        innerEl.appendChild(this.createSignalLabel(clockName, cdcSignalMap));
+      }
+    }
 
-      var covStatus = 'normal';
-      var toggleCount = 0;
-      var toggleStats = (this.coverageData && CoverageAnalyzer.extractStats(this.coverageData.toggleCoverage)) || {};
-      if (toggleStats[name]) {
-        var tc = toggleStats[name];
-        toggleCount = tc.toggleCount || 0;
-        covStatus = tc.status || 'normal';
-        if (tc.status === 'uncovered' || tc.status === 'stuck') {
-          label.classList.add('signal-uncovered');
+    for (var gi = 0; gi < this.signalGroups.length; gi++) {
+      var group = this.signalGroups[gi];
+      var visibleSignals = this.getGroupVisibleSignals(group);
+      if (this.filterText && visibleSignals.length === 0) continue;
+
+      var groupEl = document.createElement('div');
+      groupEl.className = 'signal-group';
+      groupEl.dataset.groupId = group.id;
+
+      var header = this.createGroupHeader(group);
+      groupEl.appendChild(header);
+
+      var signalsContainer = document.createElement('div');
+      signalsContainer.className = 'group-signals';
+
+      if (!this.collapsedGroups[group.id]) {
+        for (var si = 0; si < group.signals.length; si++) {
+          var sigName = group.signals[si];
+          if (this.matchesFilter(sigName)) {
+            signalsContainer.appendChild(this.createSignalLabel(sigName, cdcSignalMap));
+          }
         }
       }
+      groupEl.appendChild(signalsContainer);
+      innerEl.appendChild(groupEl);
+    }
 
-      if (sig.clockDomain && this.domainColorMap[sig.clockDomain]) {
-        label.style.borderLeft = '3px solid ' + this.domainColorMap[sig.clockDomain].line;
-        label.style.background = this.domainColorMap[sig.clockDomain].bg;
+    var visibleUngrouped = this.ungroupedSignals.filter(function(s) {
+      return self.matchesFilter(s);
+    });
+    if (visibleUngrouped.length > 0) {
+      var ungroupedSection = document.createElement('div');
+      ungroupedSection.className = 'ungrouped-section';
+
+      if (!this.filterText) {
+        var ungroupedHeader = document.createElement('div');
+        ungroupedHeader.className = 'ungrouped-header';
+        ungroupedHeader.textContent = '未分组';
+        ungroupedSection.appendChild(ungroupedHeader);
       }
 
-      var nameSpan = document.createElement('span');
-      nameSpan.textContent = name;
-      label.appendChild(nameSpan);
-
-      var toggleSpan = document.createElement('span');
-      toggleSpan.className = 'toggle-count';
-      if (!this.clockSignals[name]) {
-        toggleSpan.textContent = toggleCount + 'T';
+      for (var ui = 0; ui < visibleUngrouped.length; ui++) {
+        ungroupedSection.appendChild(this.createSignalLabel(visibleUngrouped[ui], cdcSignalMap));
       }
-      label.appendChild(toggleSpan);
-
-      var typeSpan = document.createElement('span');
-      typeSpan.className = 'signal-type';
-      if (this.clockSignals[name]) {
-        typeSpan.className += ' type-clk';
-        typeSpan.textContent = 'CLK';
-      } else if (sig.isReg) {
-        typeSpan.className += ' type-reg';
-        typeSpan.textContent = 'REG';
-      } else if (sig.type === 'input') {
-        typeSpan.className += ' type-input';
-        typeSpan.textContent = 'IN';
-      } else {
-        typeSpan.className += ' type-wire';
-        typeSpan.textContent = 'WIRE';
-      }
-      label.appendChild(typeSpan);
-
-      var hasGlitch = false;
-      for (var g = 0; g < this.glitches.length; g++) {
-        if (this.glitches[g].signal === name) { hasGlitch = true; break; }
-      }
-      if (hasGlitch) {
-        var glitchInd = document.createElement('span');
-        glitchInd.className = 'glitch-indicator';
-        glitchInd.textContent = '⚠';
-        label.appendChild(glitchInd);
-      }
-
-      if (cdcSignalMap[name]) {
-        var cdcInd = document.createElement('span');
-        cdcInd.className = 'cdc-indicator';
-        cdcInd.textContent = '⚡';
-        cdcInd.title = '跨时钟域传递 (' + cdcSignalMap[name].length + ')';
-        cdcInd.dataset.signal = name;
-        cdcInd.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var sigName = this.dataset.signal;
-          self.showCDCDetail(sigName, cdcSignalMap[sigName]);
-        });
-        label.appendChild(cdcInd);
-      }
-
-      label.addEventListener('click', function() {
-        var sigName = this.dataset.signal;
-        self.toggleHighlight(sigName);
-      });
-
-      this.signalListEl.appendChild(label);
+      innerEl.appendChild(ungroupedSection);
     }
 
     for (var j = 0; j < this.buses.length; j++) {
       var bus = this.buses[j];
+      if (!this.matchesFilter(bus.name)) continue;
+
       var busLabel = document.createElement('div');
       busLabel.className = 'signal-label bus-label';
       busLabel.dataset.signal = bus.name;
@@ -449,8 +617,10 @@ var WaveformViewer = (function() {
         self.toggleHighlight(sigName);
       });
 
-      this.signalListEl.appendChild(busLabel);
+      innerEl.appendChild(busLabel);
     }
+
+    this.setupDragAndDrop();
   };
 
   Viewer.prototype.attachDecoder = function(busName, decoderConfig) {
@@ -1033,7 +1203,7 @@ var WaveformViewer = (function() {
       var itemH = this.getDisplayItemHeight(item);
       var y = currentY - this.scrollY;
 
-      if (y + itemH >= 0 && y <= h && item.type !== 'bus') {
+      if (y + itemH >= 0 && y <= h && item.type !== 'bus' && item.type !== 'group-header') {
         var sig = this.signalMap[item.name];
         if (sig && sig.clockDomain && this.domainColorMap[sig.clockDomain]) {
           ctx.fillStyle = this.domainColorMap[sig.clockDomain].bg;
@@ -1198,7 +1368,22 @@ var WaveformViewer = (function() {
       var y = currentY - this.scrollY;
 
       if (y + itemH >= 0 && y <= h) {
-        if (item.type === 'bus') {
+        if (item.type === 'group-header') {
+          ctx.fillStyle = COLORS.bg;
+          ctx.fillRect(0, y, w, itemH);
+          ctx.strokeStyle = COLORS.gridMajor;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, y + itemH);
+          ctx.lineTo(w, y + itemH);
+          ctx.stroke();
+
+          ctx.fillStyle = COLORS.gridMajor;
+          ctx.font = 'bold 11px ' + (window.getComputedStyle(document.body).fontFamily || 'monospace');
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(item.groupName || '', 8, y + itemH / 2);
+        } else if (item.type === 'bus') {
           if (this.decoders[item.name]) {
             this.drawDecoderLayer(ctx, item.name, y, w);
             this.drawBusWaveform(ctx, item.name, y + DECODER_HEIGHT, w);
@@ -2169,6 +2354,337 @@ var WaveformViewer = (function() {
 
   Viewer.prototype.updateSignalListScroll = function() {
     this.signalListEl.parentElement.scrollTop = this.scrollY;
+  };
+
+  Viewer.prototype.toggleGroup = function(groupId) {
+    if (this.collapsedGroups[groupId]) {
+      delete this.collapsedGroups[groupId];
+    } else {
+      this.collapsedGroups[groupId] = true;
+    }
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+  };
+
+  Viewer.prototype.createNewGroup = function(name) {
+    var id = 'group_' + Date.now();
+    this.signalGroups.push({
+      id: id,
+      name: name || 'New Group',
+      signals: []
+    });
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+  };
+
+  Viewer.prototype.renameGroup = function(groupId, newName) {
+    var group = this.signalGroups.find(function(g) { return g.id === groupId; });
+    if (group) {
+      group.name = newName;
+      this.buildSignalLabels();
+      this.resize();
+      this.draw();
+    }
+  };
+
+  Viewer.prototype.deleteGroup = function(groupId) {
+    var idx = this.signalGroups.findIndex(function(g) { return g.id === groupId; });
+    if (idx !== -1) {
+      var group = this.signalGroups[idx];
+      for (var i = 0; i < group.signals.length; i++) {
+        this.ungroupedSignals.push(group.signals[i]);
+      }
+      this.signalGroups.splice(idx, 1);
+      delete this.collapsedGroups[groupId];
+      this.buildSignalLabels();
+      this.resize();
+      this.draw();
+    }
+  };
+
+  Viewer.prototype.showGroupContextMenu = function(x, y, groupId) {
+    var self = this;
+    var existing = document.getElementById('group-context-menu');
+    if (existing) existing.remove();
+
+    var menu = document.createElement('div');
+    menu.id = 'group-context-menu';
+    menu.className = 'group-context-menu';
+
+    menu.innerHTML =
+      '<div class="menu-item" data-action="rename">重命名</div>' +
+      '<div class="menu-item" data-action="delete" style="color:#f38ba8;">删除组</div>';
+
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    document.body.appendChild(menu);
+
+    menu.querySelectorAll('.menu-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        var action = this.dataset.action;
+        menu.remove();
+
+        if (action === 'rename') {
+          var newName = prompt('输入新的组名:');
+          if (newName && newName.trim()) {
+            self.renameGroup(groupId, newName.trim());
+          }
+        } else if (action === 'delete') {
+          self.deleteGroup(groupId);
+        }
+      });
+    });
+
+    setTimeout(function() {
+      document.addEventListener('click', function closeMenu(e) {
+        if (!menu.contains(e.target)) {
+          menu.remove();
+          document.removeEventListener('click', closeMenu);
+        }
+      });
+    }, 10);
+  };
+
+  Viewer.prototype.setFilterText = function(text) {
+    var self = this;
+    if (this.filterDebounceTimer) {
+      clearTimeout(this.filterDebounceTimer);
+    }
+    this.filterDebounceTimer = setTimeout(function() {
+      self.filterText = text;
+      self.buildSignalLabels();
+      self.resize();
+      self.draw();
+    }, 200);
+  };
+
+  Viewer.prototype.getSignalLocation = function(signalName) {
+    for (var gi = 0; gi < this.signalGroups.length; gi++) {
+      var group = this.signalGroups[gi];
+      var idx = group.signals.indexOf(signalName);
+      if (idx !== -1) {
+        return { type: 'group', groupId: group.id, index: idx };
+      }
+    }
+    var ungroupedIdx = this.ungroupedSignals.indexOf(signalName);
+    if (ungroupedIdx !== -1) {
+      return { type: 'ungrouped', index: ungroupedIdx };
+    }
+    return null;
+  };
+
+  Viewer.prototype.removeSignal = function(signalName) {
+    var loc = this.getSignalLocation(signalName);
+    if (!loc) return false;
+
+    if (loc.type === 'group') {
+      var group = this.signalGroups.find(function(g) { return g.id === loc.groupId; });
+      if (group) {
+        group.signals.splice(loc.index, 1);
+        return true;
+      }
+    } else if (loc.type === 'ungrouped') {
+      this.ungroupedSignals.splice(loc.index, 1);
+      return true;
+    }
+    return false;
+  };
+
+  Viewer.prototype.moveSignalToGroup = function(signalName, targetGroupId, targetIndex) {
+    var loc = this.getSignalLocation(signalName);
+    if (!loc) return false;
+
+    var inTargetGroup = loc.type === 'group' && loc.groupId === targetGroupId;
+
+    if (targetGroupId === null) {
+      this.removeSignal(signalName);
+      var insertIdx = targetIndex === -1 ? this.ungroupedSignals.length : targetIndex;
+      this.ungroupedSignals.splice(insertIdx, 0, signalName);
+    } else {
+      var targetGroup = this.signalGroups.find(function(g) { return g.id === targetGroupId; });
+      if (!targetGroup) return false;
+
+      if (inTargetGroup) {
+        var oldIndex = targetGroup.signals.indexOf(signalName);
+        targetGroup.signals.splice(oldIndex, 1);
+        if (targetIndex > oldIndex) targetIndex--;
+      } else {
+        this.removeSignal(signalName);
+      }
+      var insertIdx = targetIndex === -1 ? targetGroup.signals.length : targetIndex;
+      targetGroup.signals.splice(insertIdx, 0, signalName);
+    }
+
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+    return true;
+  };
+
+  Viewer.prototype.moveGroup = function(groupId, targetIndex) {
+    var idx = this.signalGroups.findIndex(function(g) { return g.id === groupId; });
+    if (idx === -1) return false;
+    if (idx === targetIndex || targetIndex === idx + 1) return true;
+
+    var group = this.signalGroups[idx];
+    this.signalGroups.splice(idx, 1);
+    if (targetIndex > idx) targetIndex--;
+    this.signalGroups.splice(targetIndex, 0, group);
+
+    this.buildSignalLabels();
+    this.resize();
+    this.draw();
+    return true;
+  };
+
+  Viewer.prototype.clearDragOverClasses = function() {
+    var innerEl = document.getElementById('signal-list-inner');
+    if (!innerEl) return;
+    var elements = innerEl.querySelectorAll('.drag-over-top, .drag-over-bottom, .drag-over');
+    for (var i = 0; i < elements.length; i++) {
+      elements[i].classList.remove('drag-over-top', 'drag-over-bottom', 'drag-over');
+    }
+  };
+
+  Viewer.prototype.setupDragAndDrop = function() {
+    var self = this;
+    var innerEl = document.getElementById('signal-list-inner');
+    if (!innerEl) innerEl = this.signalListEl;
+
+    var dragType = null;
+    var draggedId = null;
+
+    innerEl.querySelectorAll('.signal-label, .group-header').forEach(function(el) {
+      el.addEventListener('dragstart', function(e) {
+        if (this.classList.contains('signal-label')) {
+          dragType = 'signal';
+          draggedId = this.dataset.signal;
+        } else if (this.classList.contains('group-header')) {
+          dragType = 'group';
+          draggedId = this.dataset.groupId;
+        }
+        this.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', draggedId);
+      });
+
+      el.addEventListener('dragend', function() {
+        this.classList.remove('dragging');
+        self.clearDragOverClasses();
+        dragType = null;
+        draggedId = null;
+      });
+
+      el.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+
+        self.clearDragOverClasses();
+
+        var rect = this.getBoundingClientRect();
+        var midY = rect.top + rect.height / 2;
+        var isTop = e.clientY < midY;
+
+        if (dragType === 'signal') {
+          if (this.classList.contains('signal-label') && !self.clockSignals[this.dataset.signal]) {
+            this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
+          } else if (this.classList.contains('group-header')) {
+            this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
+          }
+        } else if (dragType === 'group') {
+          if (this.classList.contains('group-header')) {
+            this.classList.add(isTop ? 'drag-over-top' : 'drag-over-bottom');
+          }
+        }
+      });
+
+      el.addEventListener('dragleave', function() {
+        self.clearDragOverClasses();
+      });
+
+      el.addEventListener('drop', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        self.clearDragOverClasses();
+
+        if (!dragType || !draggedId) return;
+
+        var rect = this.getBoundingClientRect();
+        var midY = rect.top + rect.height / 2;
+        var isTop = e.clientY < midY;
+
+        if (dragType === 'signal') {
+          if (this.classList.contains('signal-label')) {
+            var targetSignal = this.dataset.signal;
+            if (self.clockSignals[targetSignal]) return;
+
+            var targetLoc = self.getSignalLocation(targetSignal);
+            if (targetLoc) {
+              var targetIndex = isTop ? targetLoc.index : targetLoc.index + 1;
+              var targetGroupId = targetLoc.type === 'group' ? targetLoc.groupId : null;
+              self.moveSignalToGroup(draggedId, targetGroupId, targetIndex);
+            }
+          } else if (this.classList.contains('group-header')) {
+            var targetGroupId = this.dataset.groupId;
+            var groupIdx = self.signalGroups.findIndex(function(g) { return g.id === targetGroupId; });
+            if (isTop) {
+              if (groupIdx === 0) {
+                self.moveSignalToGroup(draggedId, null, 0);
+              } else {
+                var prevGroup = self.signalGroups[groupIdx - 1];
+                self.moveSignalToGroup(draggedId, prevGroup.id, prevGroup.signals.length);
+              }
+            } else {
+              self.moveSignalToGroup(draggedId, targetGroupId, 0);
+            }
+          }
+        } else if (dragType === 'group' && this.classList.contains('group-header')) {
+          var targetGroupIdx = self.signalGroups.findIndex(function(g) { return g.id === this.dataset.groupId; }.bind(this));
+          var insertIdx = isTop ? targetGroupIdx : targetGroupIdx + 1;
+          self.moveGroup(draggedId, insertIdx);
+        }
+      });
+    });
+
+    var ungroupedSection = innerEl.querySelector('.ungrouped-section');
+    if (ungroupedSection) {
+      ungroupedSection.addEventListener('dragover', function(e) {
+        if (dragType !== 'signal') return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        self.clearDragOverClasses();
+        ungroupedSection.classList.add('drag-over-bottom');
+      });
+
+      ungroupedSection.addEventListener('dragleave', function() {
+        self.clearDragOverClasses();
+      });
+
+      ungroupedSection.addEventListener('drop', function(e) {
+        if (dragType !== 'signal') return;
+        e.preventDefault();
+        e.stopPropagation();
+        self.clearDragOverClasses();
+        self.moveSignalToGroup(draggedId, null, -1);
+      });
+    }
+
+    var signalList = document.getElementById('signal-list');
+    if (signalList) {
+      signalList.addEventListener('dragover', function(e) {
+        e.preventDefault();
+      });
+
+      signalList.addEventListener('drop', function(e) {
+        if (dragType !== 'signal') return;
+        e.preventDefault();
+        e.stopPropagation();
+        self.clearDragOverClasses();
+        self.moveSignalToGroup(draggedId, null, -1);
+      });
+    }
   };
 
   return Viewer;
